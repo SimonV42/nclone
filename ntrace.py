@@ -3,6 +3,7 @@ import matplotlib.collections as mc
 import os.path
 import math
 import zlib
+import struct
 
 from nsim import *
 
@@ -185,12 +186,16 @@ if tool_mode == "trace" and OUTTE_MODE == False:
 #For each replay, write to file whether it is valid or not, then write the series 
 #of coordinates for each frame. Only ran in outte mode and in trace mode.
 if tool_mode == "trace" and OUTTE_MODE == True:
-    with open("output.txt", "w") as f:
-        for i in range(len(inputs_list)):
-            print(validlog[i], file=f)
-            for frame in range(len(xposlog[i])):
-                print(round(xposlog[i][frame], 2), round(yposlog[i][frame], 2), file=f)
-                print("%.3f" % ((90 * 60 - frameslog[0] + 1 + goldlog[0][0] * 120) / 60))
+    with open("output.bin", "wb") as f:
+        n = len(inputs_list)
+        f.write(struct.pack('B', n))
+        f.write(struct.pack(f'{n}B', *validlog))
+        for i in range(n):
+            frames = len(xposlog[i])
+            f.write(struct.pack('<H', frames))
+            for frame in range(frames):
+                f.write(struct.pack('<2d', xposlog[i][frame], yposlog[i][frame]))
+    print("%.3f" % ((90 * 60 - frameslog[0] + 1 + goldlog[0][0] * 120) / 60))
 
 #Print episode splits and other info to the console. Only ran in manual mode and splits mode.
 if tool_mode == "splits" and OUTTE_MODE == False:

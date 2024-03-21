@@ -1,5 +1,18 @@
 import math
 from itertools import product
+import os.path
+import struct
+import copy
+
+
+NINJA_ANIM_MODE = True
+if os.path.isfile("anim_data_line_new.txt.bin"):
+    with open("anim_data_line_new.txt.bin", mode="rb") as f:
+        frames = struct.unpack('<L', f.read(4))[0]
+        ninja_animation = [[list(struct.unpack('<2d', f.read(16))) for _ in range(13)] for _ in range(frames)]
+else:
+    NINJA_ANIM_MODE = False
+
 
 class Ninja:
     """This class is responsible for updating and storing the positions and velocities of each ninja.
@@ -29,12 +42,23 @@ class Ninja:
         self.applied_gravity = self.GRAVITY_FALL
         self.applied_friction = self.FRICTION_GROUND
         self.state = 0 #0:Immobile, 1:Running, 2:Ground sliding, 3:Jumping, 4:Falling, 5:Wall sliding
+        self.airborn = False
+        self.walled = False
         self.jump_input_old = 0
         self.jump_duration = 0
         self.jump_buffer = -1
         self.floor_buffer = -1
         self.wall_buffer = -1
         self.launch_pad_buffer = -1
+        self.floor_normalized_x = 0
+        self.floor_normalized_y = -1
+        self.anim_state = 0
+        self.facing = 1
+        self.tilt = 0
+        self.anim_rate = 0
+        self.anim_frame = 11
+        self.frame_residual = 0
+        self.update_graphics()
         self.poslog = [(0, self.xpos, self.ypos)] #Used for debug
         self.speedlog = [(0,0,0)]
         self.xposlog = [self.xpos] #Used to produce trace
@@ -398,6 +422,105 @@ class Ninja:
                         if self.state == 3:
                             self.applied_gravity = self.GRAVITY_FALL
                         self.state = 5
+
+    def update_graphics(self):
+        """Update parameters necessary to draw the limbs of the ninja."""
+        anim_state_old = self.anim_state
+        if self.state == 5:
+            self.anim_state = 4
+            self.tilt = 0
+            self.facing = -self.wall_normal
+            self.anim_rate = self.yspeed
+        elif self.state == 6:
+            self.anim_state = 5
+            return
+        elif self.state == 9:
+            self.anim_state = 7
+            return
+        elif not self.airborn and self.state != 3:
+            self.tilt = math.atan2(self.floor_normalized_y, self.floor_normalized_x) + math.pi/2
+            if self.state == 0:
+                self.anim_state = 0
+            if self.state == 1:
+                self.anim_state = 1
+                self.anim_rate = abs(self.yspeed*self.floor_normalized_x - self.xspeed*self.floor_normalized_y)
+                if self.hor_input:
+                    self.facing = self.hor_input
+            if self.state == 2:
+                self.anim_state = 2
+                self.anim_rate = abs(self.yspeed*self.floor_normalized_x - self.xspeed*self.floor_normalized_y)
+            if self.state == 8:
+                self.anim_state = 6
+        else:
+            self.anim_state = 3
+            self.anim_rate = self.yspeed
+            if self.state == 3:
+                self.tilt = 0
+            else:
+                self.tilt *= 0.9
+        if self.state != 5:
+            if abs(self.xspeed) > 0.01:
+                self.facing = 1 if self.xspeed > 0 else -1
+
+        if self.anim_state != anim_state_old:
+            if self.anim_state == 0:
+                if self.anim_frame > 0:
+                    self.anim_frame = 1
+            if self.anim_state == 1:
+                if anim_state_old != 3:
+                    if anim_state_old == 2:
+                        self.anim_frame = 39
+                        self.run_cycle = 162
+                        self.frame_residual = 0
+                    else:
+                        self.anim_frame = 12
+                        self.run_cycle = 0
+                        self.frame_residual = 0
+                else:
+                    self.anim_frame = 18
+                    self.run_cycle = 36
+                    self.frame_residual = 0
+            if self.anim_state == 2:
+                self.anim_frame = 0
+            if self.anim_state == 3:
+                self.anim_frame = 84
+            if self.anim_state == 4:
+                self.anim_frame = 103
+            if self.anim_state == 6:
+                self.anim_frame = 104
+
+        if self.anim_state == 0:
+            if self.anim_frame < 11:
+                self.anim_frame += 1
+        if self.anim_state == 1:
+            new_cycle = self.anim_rate/0.15 + self.frame_residual
+            self.frame_residual = new_cycle - math.floor(new_cycle)
+            self.run_cycle = (self.run_cycle + math.floor(new_cycle)) % 432
+            self.anim_frame = self.run_cycle // 6 + 12
+        if self.anim_state == 3:
+            if self.anim_rate >= 0:
+                rate = math.sqrt(min(self.anim_rate*0.6, 1))
+            else:
+                rate = max(self.anim_rate*1.5, -1)
+            self.anim_frame = 93 + math.floor(9*rate)
+        
+        if NINJA_ANIM_MODE:
+            self.calc_ninja_position()
+    
+    def calc_ninja_position(self):
+        new_bones = copy.deepcopy(ninja_animation[self.anim_frame])
+        if self.anim_state == 1:
+            interpolation = (self.run_cycle % 6) / 6
+            if interpolation > 0:
+                next_bones = ninja_animation[(self.anim_frame - 12)%72 + 12]
+                new_bones = [[new_bones[i][j] + interpolation*(next_bones[i][j] - new_bones[i][j]) for j in range(2)] for i in range(13)]
+        for i in range(13):
+            new_bones[i][0] *= self.facing
+            x, y = new_bones[i]
+            tcos, tsin = math.cos(self.tilt), math.sin(self.tilt)
+            new_bones[i][0] = x*tcos - y*tsin
+            new_bones[i][1] = x*tsin + y*tcos
+        self.bones = new_bones
 
 
 class GridSegmentLinear:
@@ -1257,6 +1380,7 @@ class Simulator:
             self.ninja.collide_vs_tiles() #Handle physical collisions with tiles.
         self.ninja.post_collision() #Do post collision calculations.
         self.ninja.think() #Make ninja think
+        self.ninja.update_graphics() #Update limbs of ninja
 
         #Update all the logs for debugging purposes and for tracing the route.
         self.ninja.poslog.append((self.frame, round(self.ninja.xpos, 6), round(self.ninja.ypos, 6)))

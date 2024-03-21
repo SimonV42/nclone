@@ -83,6 +83,7 @@ yposlog = []
 goldlog = []
 frameslog = []
 validlog = []
+entitylog = []
 
 #This dictionary converts raw input data into the horizontal and jump components.
 HOR_INPUTS_DIC = {0:0, 1:0, 2:1, 3:1, 4:-1, 5:-1, 6:-1, 7:-1}
@@ -112,6 +113,7 @@ for i in range(len(inputs_list)):
     #Append the positions log of each replay
     xposlog.append(sim.ninja.xposlog)
     yposlog.append(sim.ninja.yposlog)
+    entitylog.append(sim.entitylog)
 
     #Calculate the amount of gold collected for each replay.
     gold_amount = mdata[1154]
@@ -187,10 +189,17 @@ if tool_mode == "trace" and OUTTE_MODE == False:
 #of coordinates for each frame. Only ran in outte mode and in trace mode.
 if tool_mode == "trace" and OUTTE_MODE == True:
     with open("output.bin", "wb") as f:
+        # Write run count, and then valid log (1 byte per run)
         n = len(inputs_list)
         f.write(struct.pack('B', n))
         f.write(struct.pack(f'{n}B', *validlog))
         for i in range(n):
+            # Entity log: Write collided entities count and then dump log
+            objs = len(entitylog[i])
+            f.write(struct.pack('<H', objs))
+            for obj in range(objs):
+                f.write(struct.pack('<HBddB', *entitylog[i][obj]))
+            # Position log: Write frame count and then dump log
             frames = len(xposlog[i])
             f.write(struct.pack('<H', frames))
             for frame in range(frames):

@@ -642,6 +642,9 @@ class Entity:
             self.cell = cell_new
             self.sim.entity_dic[self.cell].append(self)
 
+    def log(self, state = 1):
+        self.sim.entitylog.append((self.sim.frame, self.type, self.xpos, self.ypos, state))
+
 
 class EntityGold(Entity):
     RADIUS = 6
@@ -658,7 +661,24 @@ class EntityGold(Entity):
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
             self.collected = self.sim.frame
             self.active = False
+            self.log()
 
+class EntityToggleMine(Entity):
+    RADIUS = 3.5
+
+    def __init__(self, type, sim, xcoord, ycoord):
+        super().__init__(type, sim, xcoord, ycoord)
+        self.is_logical_collidable = True
+        self.toggled = False
+
+    def logical_collision(self):
+        """If the ninja is colliding with the toggle mine, store the collection frame."""
+        ninja = self.sim.ninja
+        if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
+                                    ninja.xpos, ninja.ypos, ninja.RADIUS):
+            self.toggled = self.sim.frame
+            self.active = False
+            self.log(2)
 
 class EntityExit(Entity):
     RADIUS = 12
@@ -694,6 +714,7 @@ class EntityExitSwitch(Entity):
             self.collected = True
             self.active = False
             self.sim.entity_dic[self.parent.cell].append(self.parent) #Add door to the entity grid so the ninja can touch it
+            self.log()
 
 
 class EntityDoorBase(Entity):
@@ -783,6 +804,7 @@ class EntityDoorLocked(EntityDoorBase):
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
             self.change_state(closed = False)
             self.active = False
+            self.log()
 
 
 class EntityDoorTrap(EntityDoorBase):
@@ -799,6 +821,7 @@ class EntityDoorTrap(EntityDoorBase):
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
             self.change_state(closed = True)
             self.active = False
+            self.log()
 
 
 class EntityLaunchPad(Entity):
@@ -1204,6 +1227,7 @@ class Simulator:
 
     def __init__(self):
         self.frame = 1
+        self.entitylog = []
 
         #initiate a dictionary mapping each tile id to its cell. Start by filling it with full tiles (id of 1).
         self.tile_dic = {}
@@ -1354,6 +1378,8 @@ class Simulator:
                 entity = EntityBounceBlock(type, self, xcoord, ycoord)
             elif type == 20:
                 entity = EntityThwump(type, self, xcoord, ycoord, orientation)
+            elif type == 21:
+                entity = EntityToggleMine(type, self, xcoord, ycoord)
             elif type == 24:
                 entity = EntityBoostPad(type, self, xcoord, ycoord)
             elif type == 28:

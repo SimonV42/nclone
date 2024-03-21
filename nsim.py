@@ -701,6 +701,7 @@ class EntityDoorBase(Entity):
         super().__init__(type, sim, xcoord, ycoord)
         self.is_logical_collidable = True
         self.closed = True
+        self.orientation = orientation
         self.sw_xpos = 6 * sw_xcoord
         self.sw_ypos = 6 * sw_ycoord
         self.is_vertical = orientation in (0, 4)
@@ -807,6 +808,7 @@ class EntityLaunchPad(Entity):
     def __init__(self, type, sim, xcoord, ycoord, orientation):
         super().__init__(type, sim, xcoord, ycoord)
         self.is_logical_collidable = True
+        self.orientation = orientation
         self.normal_x, self.normal_y = map_orientation_to_vector(orientation)
 
     def logical_collision(self):
@@ -831,6 +833,7 @@ class EntityOneWayPlatform(Entity):
         super().__init__(type, sim, xcoord, ycoord)
         self.is_logical_collidable = True
         self.is_physical_collidable = True
+        self.orientation = orientation
         self.normal_x, self.normal_y = map_orientation_to_vector(orientation)
 
     def calculate_depenetration(self, ninja):
@@ -922,6 +925,7 @@ class EntityThwump(Entity):
         self.is_thinkable = True
         self.is_logical_collidable = True
         self.is_physical_collidable = True
+        self.orientation = orientation
         self.is_horizontal = orientation in (0, 4)
         self.direction = 1 if orientation in (0, 2) else -1
         self.xorigin, self.yorigin = self.xpos, self.ypos
@@ -1250,6 +1254,8 @@ class Simulator:
                 self.ver_segment_dic[(x, y)] = value
         
     def load(self, map_data):
+        self.__init__()
+
         self.map_data = map_data
         #extract tile data from map data
         tile_data = self.map_data[184:1150]

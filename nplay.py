@@ -50,7 +50,7 @@ def tiledraw(init):
     context.set_operator(cairo.Operator.CLEAR)
     context.rectangle(0, 0, width, height)
     context.fill()
-    context.set_operator(cairo.Operator.OVER)
+    context.set_operator(cairo.Operator.ADD)
 
     context.set_source_rgb(*hex2float(TILECOLOR))
     for coords, tile in sim.tile_dic.items():
@@ -235,7 +235,7 @@ while running:
     screen.fill("#"+TILECOLOR)
     screen.blit(entitydraw(resize), (xoff, yoff))
     screen.blit(tiledraw(resize), (xoff, yoff))
-    pygame.draw.rect(screen, "#"+TILECOLOR, (xoff-2, yoff-2, width+4, height+4), 2)
+    pygame.draw.rect(screen, "#"+TILECOLOR, (xoff-1, yoff-1, width+2, height+2), 1)
 
     sim.tick(hor_input, jump_input)
 

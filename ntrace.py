@@ -105,9 +105,9 @@ for i in range(len(inputs_list)):
     sim.load(mdata)
 
     #Execute the main physics function once per frame
-    while sim.frame < inp_len+1:
-        hor_input = hor_inputs[sim.frame-1]
-        jump_input = jump_inputs[sim.frame-1]
+    while sim.frame < inp_len:
+        hor_input = hor_inputs[sim.frame]
+        jump_input = jump_inputs[sim.frame]
         sim.tick(hor_input, jump_input)
 
     #Append the positions log of each replay

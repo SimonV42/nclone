@@ -7,7 +7,7 @@ import struct
 
 from nsim import *
 
-OUTTE_MODE = True #Only set to False when manually running the script. Changes what the output of the tool is.
+OUTTE_MODE = False #Only set to False when manually running the script. Changes what the output of the tool is.
 COMPRESSED_INPUTS = True #Only set to False when manually running the script and using regular uncompressed input files.
 
 #Required names for files. Only change values if running manually.
@@ -91,6 +91,8 @@ JUMP_INPUTS_DIC = {0:0, 1:1, 2:0, 3:1, 4:0, 5:1, 6:0, 7:1}
 
 #Repeat this loop for each individual replay
 for i in range(len(inputs_list)):
+    valid = False
+
     #Extract inputs and map data from the list
     inputs = inputs_list[i]
     mdata = mdata_list[i]
@@ -109,11 +111,19 @@ for i in range(len(inputs_list)):
         hor_input = hor_inputs[sim.frame]
         jump_input = jump_inputs[sim.frame]
         sim.tick(hor_input, jump_input)
+        if sim.ninja.state == 6:
+            break
+        if sim.ninja.state == 8:
+            if sim.frame == inp_len:
+                valid = True
+            break
 
-    #Append the positions log of each replay
+    #Append to the logs for each replay.
     xposlog.append(sim.ninja.xposlog)
     yposlog.append(sim.ninja.yposlog)
     entitylog.append(sim.entitylog)
+    frameslog.append(inp_len)
+    validlog.append(valid)
 
     #Calculate the amount of gold collected for each replay.
     gold_amount = mdata[1154]
@@ -123,27 +133,12 @@ for i in range(len(inputs_list)):
             if entity.collected:
                 gold_collected += 1
     goldlog.append((gold_collected, gold_amount))
-    frameslog.append(inp_len)
-
-    #Verify for each replay if the run is valid.
-    #That is, verify if the ninja collects the switch and enters the door at the end of the replay.
-    ninja_exits = []
-    for entity in sim.entity_list:
-        if entity.type == 3:
-            if entity.ninja_exit:
-                ninja_exits.append(entity.ninja_exit)
-    valid_replay = False
-    if len(ninja_exits) == 1:
-        if len(ninja_exits[0]) == 1:
-            if ninja_exits[0][0] == inp_len:
-                valid_replay = True
-    validlog.append(valid_replay)
 
     #Print info useful for debug if in manual mode
     if not OUTTE_MODE:
         print(sim.ninja.speedlog)
         print(sim.ninja.poslog)
-        print(valid_replay)
+        print(valid)
 
 #Plot the route. Only ran in manual mode.
 if tool_mode == "trace" and OUTTE_MODE == False:

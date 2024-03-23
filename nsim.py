@@ -1509,6 +1509,9 @@ class Simulator:
             index += 5
 
     def tick(self, hor_input, jump_input):
+        #Increment the current frame
+        self.frame += 1
+
         #Store inputs as ninja variables
         self.ninja.hor_input = hor_input
         self.ninja.jump_input = jump_input
@@ -1533,7 +1536,7 @@ class Simulator:
             self.ninja.think() #Make ninja think
             self.ninja.update_graphics() #Update limbs of ninja
 
-        if self.ninja.state == 6: #Placeholder because no ragdoll!
+        if self.ninja.state == 6 and NINJA_ANIM_MODE: #Placeholder because no ragdoll!
             self.ninja.anim_frame = 105
             self.ninja.calc_ninja_position()
 
@@ -1542,9 +1545,6 @@ class Simulator:
         self.ninja.speedlog.append((self.frame, round(self.ninja.xspeed, 6), round(self.ninja.yspeed, 6)))
         self.ninja.xposlog.append(self.ninja.xpos)
         self.ninja.yposlog.append(self.ninja.ypos)
-
-        #Increment the current frame
-        self.frame += 1
 
 
 def gather_segments_from_region(sim, x1, y1, x2, y2):

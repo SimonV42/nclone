@@ -1344,7 +1344,7 @@ class Simulator:
       
     def load(self, map_data):
         """From the given map data, initiate the level geometry, the entities and the ninja."""
-        self.frame = 1
+        self.frame = 0
         self.entitylog = []
 
         #initiate a dictionary mapping each tile id to its cell. Start by filling it with full tiles (id of 1).

@@ -80,7 +80,9 @@ class Ninja:
         self.anim_rate = 0
         self.anim_frame = 11
         self.frame_residual = 0
+        self.bones = [[0, 0] for _ in range(13)]
         self.update_graphics()
+        self.ragdoll = Ragdoll()
         self.poslog = [(0, self.xpos, self.ypos)] #Used for debug
         self.speedlog = [(0,0,0)]
         self.xposlog = [self.xpos] #Used to produce trace
@@ -260,7 +262,7 @@ class Ninja:
                 if impact_vel > self.MAX_SURVIVABLE_IMPACT - 4/3 * abs(self.floor_normalized_y):
                     self.xspeed = self.xspeed_old
                     self.yspeed = self.yspeed_old
-                    self.kill()
+                    self.kill(1, self.xpos, self.ypos, self.xspeed*0.5, self.yspeed*0.5)
 
         #Calculate the combined ceiling normalized normal vector if the ninja has touched any ceiling.
         if self.ceiling_count > 0:
@@ -276,12 +278,12 @@ class Ninja:
                 if impact_vel > self.MAX_SURVIVABLE_IMPACT - 4/3 * abs(self.ceiling_normalized_y):
                     self.xspeed = self.xspeed_old
                     self.yspeed = self.yspeed_old
-                    self.kill()
+                    self.kill(1, self.xpos, self.ypos, self.xspeed*0.5, self.yspeed*0.5)
 
         #Check if ninja died from crushing.
         if self.is_crushable and self.crush_len > 0:
             if math.sqrt(self.x_crush**2 + self.y_crush**2) / self.crush_len < self.MIN_SURVIVABLE_CRUSHING:
-                self.kill()
+                self.kill(2, self.xpos, self.ypos, 0, 0)
 
     def floor_jump(self):
         """Perform floor jump depending on slope angle and direction."""
@@ -505,8 +507,12 @@ class Ninja:
                         self.state = 5
 
     def think_awaiting_death(self):
-        """Should be were the ragdoll gets initiated among other things. TODO"""
+        """Set state to dead and activate ragdoll."""
         self.state = 6
+        bones_speed = [[self.bones[i][0] - self.bones_old[i][0], self.bones[i][1] - self.bones_old[i][1]] for i in range(13)]
+        #self.ragdoll.activate(self.xpos, self.ypos, self.xspeed, self.yspeed,
+        #                      self.death_xpos, self.death_ypos, self.death_xspeed, self.death_yspeed,
+        #                      self.bones, bones_speed)
 
     def update_graphics(self):
         """Update parameters necessary to draw the limbs of the ninja."""
@@ -587,6 +593,7 @@ class Ninja:
             if self.anim_frame < self.DANCE_DIC[self.dance_id][1]:
                 self.anim_frame += 1
         
+        self.bones_old = self.bones
         if NINJA_ANIM_MODE:
             self.calc_ninja_position()
     
@@ -614,9 +621,13 @@ class Ninja:
                 self.applied_gravity = self.GRAVITY_FALL
             self.state = 8
             
-    def kill(self):
+    def kill(self, type, xpos, ypos, xspeed, yspeed):
         """Set ninja's state to just killed."""
         if self.state < 6:
+            self.death_xpos = xpos
+            self.death_ypos = ypos
+            self.death_xspeed = xspeed
+            self.death_yspeed = yspeed
             if self.state == 3:
                 self.applied_gravity = self.GRAVITY_FALL
             self.state = 7
@@ -625,6 +636,60 @@ class Ninja:
         """Return whether the ninja is a valid target for various interactions."""
         return not self.state in (6, 8, 9)
 
+
+class Ragdoll:
+    """None of this is working yet. Might never will."""
+    GRAVITY = 0.06666666666666665
+    DRAG = 0.99999
+
+    def __init__(self):
+        self.state = 0
+        self.num = 13
+        self.bones_pos_old = [[0, 0] for _ in range(self.num)]
+        self.bones_speed_old = [[0, 0] for _ in range(self.num)]
+        self.bones_pos = [[0, 0] for _ in range(self.num)]
+        self.bones_speed = [[0, 0] for _ in range(self.num)]
+        self.segs = ((0, 12), (1, 12), (2, 8), (3, 9), (4, 10), (5, 11), (6, 7), (8, 0), (9, 0), (10, 1), (11, 1))
+
+    def actiavte(self, xpos, ypos, xspeed, yspeed, death_xpos, death_ypos, death_xspeed, death_yspeed,
+                 bones_pos, bones_speed):
+        self.bones_pos_old = [[xpos + 24*bone[0], ypos + 24*bone[1]] for bone in bones_pos]
+        self.bones_speed = [[xspeed + 24*bone[0], yspeed + 24*bone[1]] for bone in bones_speed]
+        for i in range(self.num):
+            dist = math.sqrt((bones_pos[i][0] - death_xpos)**2 + (bones_pos[i][1] - death_ypos)**2)
+            scale = max(1 - dist/12, 0)*1.5 + 0.5
+            bones_speed[i][0] += scale*death_xspeed
+            bones_speed[i][1] += scale*death_yspeed
+
+    def explode(self):
+        pass                
+
+    def integrate(self):
+        for i in range(self.num):
+            self.bones_speed[i][0] *= self.DRAG
+            self.bones_speed[i][1] *= self.DRAG
+            self.bones_speed[i][1] += self.GRAVITY
+            self.bones_pos[i][0] = self.bones_pos_old[i][0] + self.bones_speed[i][0]
+            self.bones_pos[i][1] = self.bones_pos_old[i][1] + self.bones_speed[i][1]
+
+    def pre_collision(self):
+        return
+    
+    def solve_constraints(self):
+        for seg in self.segs:
+            dx = self.bones_pos_old[seg[0]][0] - self.bones_pos_old[seg[1]][0]
+            dy = self.bones_pos_old[seg[0]][1] - self.bones_pos_old[seg[1]][1]
+            seg_len = math.sqrt(dx**2 + dy**2)
+
+    def collide_vs_objects(self):
+        pass
+
+    def collide_vs_tiles(self):
+        pass
+
+    def post_collision(self):
+        pass
+        
 
 class GridSegmentLinear:
     """Contains all the linear segments of tiles and doors that the ninja can interract with"""
@@ -780,7 +845,7 @@ class EntityToggleMine(Entity):
             if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
                                         ninja.xpos, ninja.ypos, ninja.RADIUS):
                 self.set_state(1)
-                ninja.kill()
+                ninja.kill(0, 0, 0, 0, 0)
 
     def set_state(self, state):
         """Set the state of the toggle. 0:toggled, 1:untoggled, 2:toggling."""
@@ -1015,6 +1080,83 @@ class EntityOneWayPlatform(Entity):
                 return self.normal_x
 
 
+class EntityDroneBase(Entity):
+    RADIUS = 7.5
+    DIR_TO_VEC = {0:[1, 0], 1:[0, 1], 2:[-1, 0], 3:[0, -1]}
+    DIR_LIST = {0:[1, 0, 3, 2], 1:[3, 0, 1, 2], 2:[0, 1, 3, 2], 3:[0, 3, 1, 2]}
+
+    def __init__(self, type, sim, xcoord, ycoord, orientation, mode, speed):
+        super().__init__(type, sim, xcoord, ycoord)
+        self.is_movable = True
+        self.speed = speed
+        self.dir = orientation // 2
+        self.dir_old = orientation // 2
+        self.mode = mode
+        self.xtarget, self.ytarget = self.xpos, self.ypos
+        self.xpos2, self.ypos2 = self.xpos, self.ypos
+
+    def move(self):
+        xspeed = self.speed * self.DIR_TO_VEC[self.dir][0]
+        yspeed = self.speed * self.DIR_TO_VEC[self.dir][1]
+        dx = self.xtarget - self.xpos
+        dy = self.ytarget - self.ypos
+        dist = math.sqrt(dx**2 + dy**2)
+        if dist < 0.000001 or (dx * (self.xtarget - (self.xpos + dx)) + dx * (self.ytarget - (self.ypos + dy))) < 0:
+            self.xpos, self.ypos = self.xtarget, self.ytarget
+            can_move = self.choose_next_direction_and_goal()
+            if can_move:
+                disp = self.speed - dist
+                self.xpos += disp * self.DIR_TO_VEC[self.dir][0]
+                self.ypos += disp * self.DIR_TO_VEC[self.dir][1]
+        else:
+            xspeed = self.speed * self.DIR_TO_VEC[self.dir][0]
+            yspeed = self.speed * self.DIR_TO_VEC[self.dir][1]
+            self.xpos += xspeed
+            self.ypos += yspeed
+            self.grid_move()
+        
+    def choose_next_direction_and_goal(self):
+        for i in range(4):
+            new_dir = (self.dir + self.DIR_LIST[self.mode][i]) % 4
+            valid_dir = self.test_next_direction_and_goal(new_dir)
+            if valid_dir:
+                self.dir_old = self.dir
+                self.dir = new_dir
+                return True
+        return False
+
+    def test_next_direction_and_goal(self, dir):
+        xdir, ydir = self.DIR_TO_VEC[dir]
+        if not ydir:
+            cell_x = math.floor((self.xpos + xdir*self.RADIUS) / 12)
+            cell_y1 = math.floor((self.ypos - self.RADIUS) / 12)
+            cell_y2 = math.floor((self.ypos + self.RADIUS) / 12)
+            valid = is_empty_column(self.sim, cell_x, cell_y1, cell_y2, xdir) and is_empty_column(self.sim, cell_x + xdir, cell_y1, cell_y2, xdir)
+        else:
+            cell_y = math.floor((self.ypos + ydir*self.RADIUS) / 12)
+            cell_x1 = math.floor((self.xpos - self.RADIUS) / 12)
+            cell_x2 = math.floor((self.xpos + self.RADIUS) / 12)
+            valid = is_empty_row(self.sim, cell_x1, cell_x2, cell_y, ydir) and is_empty_row(self.sim, cell_x1, cell_x2, cell_y + ydir, ydir)
+        if valid:
+            self.xtarget = self.xpos + 24*xdir
+            self.ytarget = self.ypos + 24*ydir
+        return valid
+
+
+class EntityDroneZap(EntityDroneBase):
+    def __init__(self, type, sim, xcoord, ycoord, orientation, mode):
+        super().__init__(type, sim, xcoord, ycoord, orientation, mode, 8/7)
+        self.is_logical_collidable = True
+    
+    def logical_collision(self):
+        ninja = self.sim.ninja
+        if ninja.is_valid_target():
+            print(self.xpos, self.ypos, self.RADIUS, ninja.xpos, ninja.ypos, ninja.RADIUS)
+            if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
+                                        ninja.xpos, ninja.ypos, ninja.RADIUS):
+                ninja.kill(0, 0, 0, 0, 0)
+
+
 class EntityBounceBlock(Entity):
     SEMI_SIDE = 9
     STIFFNESS = 0.02222222222222222
@@ -1179,7 +1321,7 @@ class EntityThwump(Entity):
                     px1, py1 = self.xpos - dx, self.ypos + dy
                     px2, py2 = self.xpos + dx, self.ypos + dy
                 if overlap_circle_vs_segment(ninja.xpos, ninja.ypos, ninja.RADIUS + 2, px1, py1, px2, py2):
-                    ninja.kill()
+                    ninja.kill(0, 0, 0, 0, 0)
                 return depen[0][0]
 
 
@@ -1301,7 +1443,7 @@ class EntityShoveThwump(Entity):
             return depen_x
         if overlap_circle_vs_circle(ninja.xpos, ninja.ypos, ninja.RADIUS,
                                     self.xpos, self.ypos, self.RADIUS):
-            ninja.kill()
+            ninja.kill(0, 0, 0, 0, 0)
 
 
 class Simulator:
@@ -1523,6 +1665,8 @@ class Simulator:
                 entity = EntityLaunchPad(type, self, xcoord, ycoord, orientation)
             elif type == 11:
                 entity = EntityOneWayPlatform(type, self, xcoord, ycoord, orientation)
+            elif type == 14:
+                entity = EntityDroneZap(type, self, xcoord, ycoord, orientation, mode)
             elif type == 17:
                 entity = EntityBounceBlock(type, self, xcoord, ycoord)
             elif type == 20:
@@ -1558,14 +1702,14 @@ class Simulator:
             if entity.is_thinkable and entity.active:
                 entity.think()
         
-        if not self.ninja.state in (6, 9):
-            ninja = self.ninja
-            self.ninja.integrate() #Do preliminary speed and position updates.
-            self.ninja.pre_collision() #Do pre collision calculations.
+        if self.ninja.state != 9:
+            ninja = self.ninja if self.ninja.state != 6 else self.ninja.ragdoll #if dead, apply physics to ragdoll instead.
+            ninja.integrate() #Do preliminary speed and position updates.
+            ninja.pre_collision() #Do pre collision calculations.
             for _ in range(4):
-                self.ninja.collide_vs_objects() #Handle PHYSICAL collisions with entities.
-                self.ninja.collide_vs_tiles() #Handle physical collisions with tiles.
-            self.ninja.post_collision() #Do post collision calculations.
+                ninja.collide_vs_objects() #Handle PHYSICAL collisions with entities.
+                ninja.collide_vs_tiles() #Handle physical collisions with tiles.
+            ninja.post_collision() #Do post collision calculations.
             self.ninja.think() #Make ninja think
             self.ninja.update_graphics() #Update limbs of ninja
 

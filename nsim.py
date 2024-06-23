@@ -398,6 +398,8 @@ class Ninja:
             self.floor_buffer = 0
 
         #This part deals with the special states: awaiting death or celebrating.
+        if self.state in (6, 9):
+            return
         if self.state == 7:
             self.think_awaiting_death()
             return
@@ -510,9 +512,9 @@ class Ninja:
         """Set state to dead and activate ragdoll."""
         self.state = 6
         bones_speed = [[self.bones[i][0] - self.bones_old[i][0], self.bones[i][1] - self.bones_old[i][1]] for i in range(13)]
-        #self.ragdoll.activate(self.xpos, self.ypos, self.xspeed, self.yspeed,
-        #                      self.death_xpos, self.death_ypos, self.death_xspeed, self.death_yspeed,
-        #                      self.bones, bones_speed)
+        self.ragdoll.activate(self.xpos, self.ypos, self.xspeed, self.yspeed,
+                              self.death_xpos, self.death_ypos, self.death_xspeed, self.death_yspeed,
+                              self.bones, bones_speed)
 
     def update_graphics(self):
         """Update parameters necessary to draw the limbs of the ninja."""
@@ -651,7 +653,7 @@ class Ragdoll:
         self.bones_speed = [[0, 0] for _ in range(self.num)]
         self.segs = ((0, 12), (1, 12), (2, 8), (3, 9), (4, 10), (5, 11), (6, 7), (8, 0), (9, 0), (10, 1), (11, 1))
 
-    def actiavte(self, xpos, ypos, xspeed, yspeed, death_xpos, death_ypos, death_xspeed, death_yspeed,
+    def activate(self, xpos, ypos, xspeed, yspeed, death_xpos, death_ypos, death_xspeed, death_yspeed,
                  bones_pos, bones_speed):
         self.bones_pos_old = [[xpos + 24*bone[0], ypos + 24*bone[1]] for bone in bones_pos]
         self.bones_speed = [[xspeed + 24*bone[0], yspeed + 24*bone[1]] for bone in bones_speed]
@@ -1082,6 +1084,7 @@ class EntityOneWayPlatform(Entity):
 
 class EntityDroneBase(Entity):
     RADIUS = 7.5
+    GRID_WIDTH = 24
     DIR_TO_VEC = {0:[1, 0], 1:[0, 1], 2:[-1, 0], 3:[0, -1]}
     DIR_LIST = {0:[1, 0, 3, 2], 1:[3, 0, 1, 2], 2:[0, 1, 3, 2], 3:[0, 3, 1, 2]}
 
@@ -1101,7 +1104,7 @@ class EntityDroneBase(Entity):
         dx = self.xtarget - self.xpos
         dy = self.ytarget - self.ypos
         dist = math.sqrt(dx**2 + dy**2)
-        if dist < 0.000001 or (dx * (self.xtarget - (self.xpos + dx)) + dx * (self.ytarget - (self.ypos + dy))) < 0:
+        if dist < 0.000001 or (dx * (self.xtarget - (self.xpos + xspeed)) + dy * (self.ytarget - (self.ypos + yspeed))) < 0:
             self.xpos, self.ypos = self.xtarget, self.ytarget
             can_move = self.choose_next_direction_and_goal()
             if can_move:
@@ -1127,20 +1130,28 @@ class EntityDroneBase(Entity):
 
     def test_next_direction_and_goal(self, dir):
         xdir, ydir = self.DIR_TO_VEC[dir]
+        xtarget = self.xpos + self.GRID_WIDTH*xdir
+        ytarget = self.ypos + self.GRID_WIDTH*ydir
         if not ydir:
             cell_x = math.floor((self.xpos + xdir*self.RADIUS) / 12)
+            cell_xtarget = math.floor((xtarget + xdir*self.RADIUS) / 12)
             cell_y1 = math.floor((self.ypos - self.RADIUS) / 12)
             cell_y2 = math.floor((self.ypos + self.RADIUS) / 12)
-            valid = is_empty_column(self.sim, cell_x, cell_y1, cell_y2, xdir) and is_empty_column(self.sim, cell_x + xdir, cell_y1, cell_y2, xdir)
+            while cell_x != cell_xtarget:
+                if not is_empty_column(self.sim, cell_x, cell_y1, cell_y2, xdir):
+                    return False
+                cell_x += xdir
         else:
             cell_y = math.floor((self.ypos + ydir*self.RADIUS) / 12)
+            cell_ytarget = math.floor((ytarget + ydir*self.RADIUS) / 12)
             cell_x1 = math.floor((self.xpos - self.RADIUS) / 12)
             cell_x2 = math.floor((self.xpos + self.RADIUS) / 12)
-            valid = is_empty_row(self.sim, cell_x1, cell_x2, cell_y, ydir) and is_empty_row(self.sim, cell_x1, cell_x2, cell_y + ydir, ydir)
-        if valid:
-            self.xtarget = self.xpos + 24*xdir
-            self.ytarget = self.ypos + 24*ydir
-        return valid
+            while cell_y != cell_ytarget:
+                if not is_empty_row(self.sim, cell_x1, cell_x2, cell_y, ydir):
+                    return False
+                cell_y += ydir
+        self.xtarget, self.ytarget = xtarget, ytarget
+        return True
 
 
 class EntityDroneZap(EntityDroneBase):
@@ -1151,11 +1162,33 @@ class EntityDroneZap(EntityDroneBase):
     def logical_collision(self):
         ninja = self.sim.ninja
         if ninja.is_valid_target():
-            print(self.xpos, self.ypos, self.RADIUS, ninja.xpos, ninja.ypos, ninja.RADIUS)
             if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
                                         ninja.xpos, ninja.ypos, ninja.RADIUS):
                 ninja.kill(0, 0, 0, 0, 0)
 
+
+class EntityDroneChaser(EntityDroneZap):
+    def __init__(self, type, sim, xcoord, ycoord, orientation, mode):
+        super().__init__(type, sim, xcoord, ycoord, orientation, mode)
+        self.is_thinkable = True
+        self.speed_slow = self.speed
+        self.speed_chase = 2 * self.speed
+        self.chasing = False
+
+    def think(self):
+        if not self.chasing:
+            ninja = self.sim.ninja
+            if ninja.is_valid_target():
+                for i in range(-1, 2):
+                    dir = (self.dir + i) % 4
+                    xdir, ydir = self.DIR_TO_VEC[dir]
+                    if xdir*(ninja.xpos - self.xpos) + ydir*(ninja.ypos - self.ypos) > 0:
+                        if abs(ydir*(ninja.xpos - self.xpos) - xdir*(ninja.ypos - self.ypos)) <= 12:
+                            pass
+
+    def choose_next_direction_and_goal(self):
+        super().choose_next_direction_and_goal()
+        
 
 class EntityBounceBlock(Entity):
     SEMI_SIDE = 9
@@ -1351,6 +1384,21 @@ class EntityBoostPad(Entity):
                 self.is_touching_ninja = True
         else:
             self.is_touching_ninja = False
+
+
+class EntityMiniDrone(EntityDroneBase):
+    def __init__(self, type, sim, xcoord, ycoord, orientation, mode):
+        super().__init__(type, sim, xcoord, ycoord, orientation, mode, 1.3)
+        self.is_logical_collidable = True
+        self.RADIUS = 4
+        self.GRID_WIDTH = 12
+    
+    def logical_collision(self):
+        ninja = self.sim.ninja
+        if ninja.is_valid_target():
+            if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
+                                        ninja.xpos, ninja.ypos, ninja.RADIUS):
+                ninja.kill(0, 0, 0, 0, 0)
 
 
 class EntityShoveThwump(Entity):
@@ -1667,6 +1715,8 @@ class Simulator:
                 entity = EntityOneWayPlatform(type, self, xcoord, ycoord, orientation)
             elif type == 14:
                 entity = EntityDroneZap(type, self, xcoord, ycoord, orientation, mode)
+            #elif type == 15:
+            #    entity = EntityDroneChaser(type, self, xcoord, ycoord, orientation, mode)
             elif type == 17:
                 entity = EntityBounceBlock(type, self, xcoord, ycoord)
             elif type == 20:
@@ -1675,6 +1725,8 @@ class Simulator:
                 entity = EntityToggleMine(type, self, xcoord, ycoord, 1)
             elif type == 24:
                 entity = EntityBoostPad(type, self, xcoord, ycoord)
+            elif type == 26:
+                entity = EntityMiniDrone(type, self, xcoord, ycoord, orientation, mode)
             elif type == 28:
                 entity = EntityShoveThwump(type, self, xcoord, ycoord)
             else:
@@ -1715,6 +1767,7 @@ class Simulator:
 
         if self.ninja.state == 6 and NINJA_ANIM_MODE: #Placeholder because no ragdoll!
             self.ninja.anim_frame = 105
+            self.ninja.anim_state = 7
             self.ninja.calc_ninja_position()
 
         #Update all the logs for debugging purposes and for tracing the route.

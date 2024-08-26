@@ -7,8 +7,8 @@ import struct
 
 from nsim import *
 
-OUTTE_MODE = False #Only set to False when manually running the script. Changes what the output of the tool is.
-COMPRESSED_INPUTS = False #Only set to False when manually running the script and using regular uncompressed input files.
+OUTTE_MODE = True #Only set to False when manually running the script. Changes what the output of the tool is.
+COMPRESSED_INPUTS = True #Only set to False when manually running the script and using regular uncompressed input files.
 
 #Required names for files. Only change values if running manually.
 RAW_INPUTS_0 = "inputs_0"

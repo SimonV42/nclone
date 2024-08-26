@@ -808,9 +808,9 @@ class Entity:
         """
         cell_new = clamp_cell(math.floor(self.xpos / 24), math.floor(self.ypos / 24))
         if cell_new != self.cell:
-            self.sim.entity_dic[self.cell].remove(self)
+            self.sim.grid_entity[self.cell].remove(self)
             self.cell = cell_new
-            self.sim.entity_dic[self.cell].append(self)
+            self.sim.grid_entity[self.cell].append(self)
 
     def log(self, state=1):
         self.sim.entitylog.append((self.sim.frame, self.type, self.xpos, self.ypos, state))
@@ -908,7 +908,7 @@ class EntityExitSwitch(Entity):
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
             self.collected = True
             self.active = False
-            self.sim.entity_dic[self.parent.cell].append(self.parent) #Add door to the entity grid so the ninja can touch it
+            self.sim.grid_entity[self.parent.cell].append(self.parent) #Add door to the entity grid so the ninja can touch it
             self.log()
 
 
@@ -1386,6 +1386,119 @@ class EntityBoostPad(Entity):
             self.is_touching_ninja = False
 
 
+class EntityDeathBall(Entity):
+    RADIUS = 5 #radius for collisions against ninjas
+    RADIUS2 = 8 #radius for collisions against other balls and tiles
+    ACCELERATION = 0.04
+    MAX_SPEED = 0.85
+    DRAG_MAX_SPEED = 0.9
+    DRAG_NO_TARGET = 0.95
+
+    def __init__(self, type, sim, xcoord, ycoord, id):
+        super().__init__(type, sim, xcoord, ycoord)
+        self.is_thinkable = True
+        self.is_logical_collidable = True
+        self.id = id
+        self.xspeed, self.yspeed = 0, 0
+
+    def think(self):
+        ninja = self.sim.ninja
+        if not ninja.is_valid_target(): #If no valid targets, decelerate ball to a stop
+            self.xspeed *= self.DRAG_NO_TARGET
+            self.yspeed *= self.DRAG_NO_TARGET
+        else: #Otherwise, apply acceleration towards closest ninja. Apply drag if speed exceeds 0.85.
+            dx = ninja.xpos - self.xpos
+            dy = ninja.ypos - self.ypos
+            dist = math.sqrt(dx**2 + dy**2)
+            if dist > 0:
+                dx /= dist
+                dy /= dist
+            self.xspeed += dx * self.ACCELERATION
+            self.yspeed += dy * self.ACCELERATION
+            speed = math.sqrt(self.xspeed**2 + self.yspeed**2)
+            if speed > self.MAX_SPEED:
+                new_speed = (speed - self.MAX_SPEED)*self.DRAG_MAX_SPEED
+                if new_speed <= 0.01: #If speed exceed the cap by a tiny amount, remove the excedent
+                    new_speed = 0
+                new_speed += self.MAX_SPEED
+                self.xspeed = self.xspeed / speed * new_speed
+                self.yspeed = self.yspeed / speed * new_speed
+        xpos_old = self.xpos
+        ypos_old = self.ypos
+        self.xpos += self.xspeed
+        self.ypos += self.yspeed
+
+        #Interpolation routine for high-speed wall collisions.
+        time = sweep_circle_vs_tiles(self.sim, xpos_old, ypos_old, self.xspeed, self.yspeed, self.RADIUS2 * 0.5)
+        self.xpos = xpos_old + time*self.xspeed
+        self.ypos = ypos_old + time*self.yspeed
+        
+        #Depenetration routine for collision against tiles.
+        xnormal, ynormal = 0, 0
+        for _ in range(16):
+            result, closest_point = get_single_closest_point(self.sim, self.xpos, self.ypos, self.RADIUS2)
+            if result == 0:
+                break
+            a, b = closest_point
+            dx = self.xpos - a
+            dy = self.ypos - b
+            dist = math.sqrt(dx**2 + dy**2)
+            depen_len = self.RADIUS2 - dist*result
+            if depen_len < 0.0000001:
+                break
+            if dist == 0: 
+                return
+            xnorm = dx / dist
+            ynorm = dy / dist
+            self.xpos += xnorm * depen_len
+            self.ypos += ynorm * depen_len
+            xnormal += xnorm
+            ynormal += ynorm
+
+        #If there has been tile colision, project speed of deathball onto surface and add bounce if applicable.
+        normal_len = math.sqrt(xnormal**2 + ynormal**2)
+        if normal_len > 0:
+            dx = xnormal / normal_len
+            dy = ynormal / normal_len
+            dot_product = self.xspeed*dx + self.yspeed*dy
+            if dot_product < 0: #Project velocity onto surface only if moving towards surface
+                speed = math.sqrt(self.xspeed**2 + self.yspeed**2)
+                bounce_strength = 1 if speed <= 1.35 else 2
+                self.xspeed -= dx * dot_product * bounce_strength
+                self.yspeed -= dy * dot_product * bounce_strength
+
+        #Handle bounces with other deathballs
+        db_count = self.sim.map_data[1200]
+        if self.id + 1 < db_count:
+            db_targets = self.sim.entity_dic[25][self.id+1:]
+            for db_target in db_targets:
+                dx = self.xpos - db_target.xpos
+                dy = self.ypos - db_target.ypos
+                dist = math.sqrt(dx**2 + dy**2)
+                if dist < 16:
+                    dx = dx / dist * 4
+                    dy = dy / dist * 4
+                    self.xspeed += dx
+                    self.yspeed += dy
+                    db_target.xspeed -= dx
+                    db_target.yspeed -= dy
+            
+        self.grid_move()
+
+    def logical_collision(self):
+        pass
+        ninja = self.sim.ninja
+        if ninja.is_valid_target():
+            if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
+                                        ninja.xpos, ninja.ypos, ninja.RADIUS):
+                dx = self.xpos - ninja.xpos
+                dy = self.ypos - ninja.ypos
+                dist = math.sqrt(dx**2 + dy**2)
+                self.xspeed += dx / dist * 10
+                self.yspeed += dy / dist * 10
+                ninja.kill(0, 0, 0, 0, 0)
+
+
 class EntityMiniDrone(EntityDroneBase):
     def __init__(self, type, sim, xcoord, ycoord, orientation, mode):
         super().__init__(type, sim, xcoord, ycoord, orientation, mode, 1.3)
@@ -1580,11 +1693,11 @@ class Simulator:
         for x in range(45):
             for y in range(26):
                 self.segment_dic[(x, y)] = []
-        self.entity_dic = {}
+        self.grid_entity = {}
         for x in range(44):
             for y in range(25):
-                self.entity_dic[(x, y)] = []
-        self.entity_list = []
+                self.grid_entity[(x, y)] = []
+        self.entity_dic = dict([(i, []) for i in range(1, 29)])
 
         #Initiate dictionaries of grid edges and segments. They are all set to zero initialy,
         #except for the edges of the frame, which are solid.
@@ -1682,6 +1795,7 @@ class Simulator:
 
         #Initiate each entity (other than ninjas)
         index = 1230
+        db_index = 0
         exit_door_count = self.map_data[1156]
         while (index < len(map_data)):
             type = self.map_data[index]
@@ -1695,7 +1809,7 @@ class Simulator:
                 entity = EntityGold(type, self, xcoord, ycoord)
             elif type == 3:
                 parent = EntityExit(type, self, xcoord, ycoord)
-                self.entity_list.append(parent)
+                self.entity_dic[type].append(parent)
                 child_xcoord = self.map_data[index + 5*exit_door_count + 1]
                 child_ycoord = self.map_data[index + 5*exit_door_count + 2]
                 entity = EntityExitSwitch(4, self, child_xcoord, child_ycoord, parent)
@@ -1725,6 +1839,9 @@ class Simulator:
                 entity = EntityToggleMine(type, self, xcoord, ycoord, 1)
             elif type == 24:
                 entity = EntityBoostPad(type, self, xcoord, ycoord)
+            elif type == 25:
+                entity = EntityDeathBall(type, self, xcoord, ycoord, db_index)
+                db_index += 1
             elif type == 26:
                 entity = EntityMiniDrone(type, self, xcoord, ycoord, orientation, mode)
             elif type == 28:
@@ -1732,8 +1849,8 @@ class Simulator:
             else:
                 entity = None
             if entity:
-                self.entity_list.append(entity)
-                self.entity_dic[entity.cell].append(entity)
+                self.entity_dic[type].append(entity)
+                self.grid_entity[entity.cell].append(entity)
             index += 5
 
     def tick(self, hor_input, jump_input):
@@ -1746,11 +1863,11 @@ class Simulator:
         self.ninja.jump_input = jump_input
 
         #Move all movable entities
-        for entity in self.entity_list: 
+        for entity in sum(self.entity_dic.values(), []):
             if entity.is_movable and entity.active:
                 entity.move()
         #Make all thinkable entities think
-        for entity in self.entity_list:
+        for entity in sum(self.entity_dic.values(), []):
             if entity.is_thinkable and entity.active:
                 entity.think()
         
@@ -1796,7 +1913,7 @@ def gather_entities_from_neighbourhood(sim, xpos, ypos):
                     range(max(cy - 1, 0), min(cy + 1, 24) + 1))
     entity_list = []
     for cell in cells:
-        entity_list += [entity for entity in sim.entity_dic[cell] if entity.active]
+        entity_list += [entity for entity in sim.grid_entity[cell] if entity.active]
     return entity_list
     
 def sweep_circle_vs_tiles(sim, xpos_old, ypos_old, dx, dy, radius):

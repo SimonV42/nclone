@@ -7,8 +7,8 @@ import struct
 
 from nsim import *
 
-OUTTE_MODE = True #Only set to False when manually running the script. Changes what the output of the tool is.
-COMPRESSED_INPUTS = True #Only set to False when manually running the script and using regular uncompressed input files.
+OUTTE_MODE = False #Only set to False when manually running the script. Changes what the output of the tool is.
+COMPRESSED_INPUTS = False #Only set to False when manually running the script and using regular uncompressed input files.
 
 #Required names for files. Only change values if running manually.
 RAW_INPUTS_0 = "inputs_0"
@@ -128,10 +128,9 @@ for i in range(len(inputs_list)):
     #Calculate the amount of gold collected for each replay.
     gold_amount = mdata[1154]
     gold_collected = 0
-    for entity in sim.entity_list:
-        if entity.type == 2:
-            if entity.collected:
-                gold_collected += 1
+    for entity in sim.entity_dic[2]:
+        if entity.collected:
+            gold_collected += 1
     goldlog.append((gold_collected, gold_amount))
 
     #Print info useful for debug if in manual mode

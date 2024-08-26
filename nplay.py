@@ -2,7 +2,7 @@ import cairo
 import pygame
 import math
 import os.path
-import struct
+import zlib
 
 from nsim import *
 
@@ -12,12 +12,20 @@ SRCHEIGHT = 600
 BGCOLOR = "cbcad0"
 TILECOLOR = "797988"
 NINJACOLOR = "000000"
-ENTITYCOLOR = "882276"
+ENTITYCOLORS = {1:"9E2126", 2:"DBE149", 3:"838384", 4:"6D97C3", 5:"000000", 6:"000000",
+                7:"000000", 8:"000000", 9:"000000", 10:"868793", 11:"666666", 12:"000000",
+                13:"000000", 14:"6EC9E0", 15:"6EC9E0", 16:"000000", 17:"E3E3E5", 18:"000000",
+                19:"000000", 20:"838384", 21:"9E2126", 22:"000000", 23:"000000", 24:"666666",
+                25:"15A7BD", 26:"6EC9E0", 27:"000000", 28:"6EC9E0"}
 
 SEGMENTWIDTH = 1
 NINJAWIDTH = 1.25
 DOORWIDTH = 2
 PLATFORMWIDTH = 3
+
+COMPRESSED_INPUTS = False
+HOR_INPUTS_DIC = {0:0, 1:0, 2:1, 3:1, 4:-1, 5:-1, 6:-1, 7:-1}
+JUMP_INPUTS_DIC = {0:0, 1:1, 2:0, 3:1, 4:0, 5:1, 6:0, 7:1}
 
 LIMBS = ((0, 12), (1, 12), (2, 8), (3, 9), (4, 10), (5, 11), (6, 7), (8, 0), (9, 0), (10, 1), (11, 1))
 
@@ -33,11 +41,22 @@ pygame.display.set_caption("N++")
 screen = pygame.display.set_mode((SRCWIDTH, SRCHEIGHT), pygame.RESIZABLE)
 clock = pygame.time.Clock()
 running = True
+running_mode = "playing"
 
 sim = Simulator()
 with open("map_data", "rb") as f:
     mapdata = [int(b) for b in f.read()]
 sim.load(mapdata)
+inputs = None
+if os.path.isfile("inputs"):
+    with open("inputs", "rb") as f:
+        if COMPRESSED_INPUTS:
+            inputs = [int(b) for b in zlib.decompress(f.read())]
+        else:
+            inputs = [int(b) for b in f.read()][215:]
+    hor_inputs = [HOR_INPUTS_DIC[inp] for inp in inputs]
+    jump_inputs = [JUMP_INPUTS_DIC[inp] for inp in inputs]
+    inp_len = len(inputs)
 
 def tiledraw(init):
     if init:
@@ -162,10 +181,10 @@ def entitydraw(init):
                 context.line_to(segment.x2*adjust, segment.y2*adjust)
         context.stroke()
 
-    context.set_source_rgb(*hex2float(ENTITYCOLOR))
     context.set_line_width(PLATFORMWIDTH*adjust)
-    for entity in sim.entity_list:
+    for entity in sum(sim.entity_dic.values(), []):
         if entity.active:
+            context.set_source_rgb(*hex2float(ENTITYCOLORS[entity.type]))
             x = entity.xpos*adjust
             y = entity.ypos*adjust
             if hasattr(entity, "normal_x") and hasattr(entity, "normal_y"):
@@ -218,14 +237,25 @@ while running:
     keys = pygame.key.get_pressed()
     hor_input = 0
     jump_input = 0
-    if keys[pygame.K_RIGHT]:
-        hor_input = 1
-    if keys[pygame.K_LEFT]:
-        hor_input = -1
-    if keys[pygame.K_z]:
-        jump_input = 1
+    if running_mode == "playing":
+        if keys[pygame.K_RIGHT]:
+            hor_input = 1
+        if keys[pygame.K_LEFT]:
+            hor_input = -1
+        if keys[pygame.K_z]:
+            jump_input = 1
+    elif running_mode == "replaying":
+        if sim.frame < inp_len:
+            hor_input = hor_inputs[sim.frame]
+            jump_input = jump_inputs[sim.frame]
     if keys[pygame.K_SPACE]:
         sim.load(mapdata)
+        running_mode = "playing"
+    if keys[pygame.K_r]:
+        if inputs:
+            sim.load(mapdata)
+            running_mode = "replaying"
+
 
     adjust = min(screen.get_width()/SRCWIDTH, screen.get_height()/SRCHEIGHT)
     width, height = SRCWIDTH*adjust, SRCHEIGHT*adjust

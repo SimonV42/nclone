@@ -63,6 +63,7 @@ class Ninja:
         self.applied_friction = self.FRICTION_GROUND
         self.state = 0 #0:Immobile, 1:Running, 2:Ground sliding, 3:Jumping, 4:Falling, 5:Wall sliding
         self.airborn = False
+        self.airborn_old = False
         self.walled = False
         self.jump_input_old = 0
         self.jump_duration = 0
@@ -241,6 +242,7 @@ class Ninja:
                 wall_normal += dx/dist
 
         #Check if airborn or walled.
+        self.airborn_old = self.airborn
         self.airborn = True
         self.walled = False
         if wall_normal:
@@ -257,7 +259,7 @@ class Ninja:
             else:
                 self.floor_normalized_x = self.floor_normal_x/floor_scalar
                 self.floor_normalized_y = self.floor_normal_y/floor_scalar
-            if self.state != 8: #Check if died from floor impact
+            if self.state != 8 and self.airborn_old: #Check if died from floor impact
                 impact_vel = -(self.floor_normalized_x*self.xspeed_old + self.floor_normalized_y*self.yspeed_old)
                 if impact_vel > self.MAX_SURVIVABLE_IMPACT - 4/3 * abs(self.floor_normalized_y):
                     self.xspeed = self.xspeed_old
@@ -1358,6 +1360,34 @@ class EntityThwump(Entity):
                 return depen[0][0]
 
 
+class EntityLaser(Entity):
+    SPIN_SPEED = 0.010471975 #roughly 2pi/600
+
+    def __init__(self, type, sim, xcoord, ycoord, orientation, mode):
+        super().__init__(type, sim, xcoord, ycoord)
+        self.is_thinkable = True
+        self.mode = "spinner"
+        self.xend, self.yend = self.xpos, self.ypos
+        dx, dy = map_orientation_to_vector(orientation)
+        self.angle = math.atan2(dy, dx)
+        self.dir = -1 if mode == 1 else 1
+        self.llog = []
+
+    def think(self):
+        if self.mode == "spinner":
+            self.think_spinner()
+
+    def think_spinner(self):
+        angle_new = (self.angle + self.SPIN_SPEED*self.dir) % (2*math.pi)
+        dx = math.cos(self.angle)
+        dy = math.sin(self.angle)
+        self.len = get_raycast_distance(self.sim, self.xpos, self.ypos, dx, dy)
+        self.xend = self.xpos + dx*self.len
+        self.yend = self.ypos + dy*self.len
+        self.llog.append((self.len, self.xend, self.yend))
+        self.angle = angle_new
+
+
 class EntityBoostPad(Entity):
     RADIUS = 6
 
@@ -1482,9 +1512,8 @@ class EntityDeathBall(Entity):
                     self.yspeed += dy
                     db_target.xspeed -= dx
                     db_target.yspeed -= dy
-            
         self.grid_move()
-
+        
     def logical_collision(self):
         pass
         ninja = self.sim.ninja
@@ -1837,6 +1866,8 @@ class Simulator:
                 entity = EntityThwump(type, self, xcoord, ycoord, orientation)
             elif type == 21:
                 entity = EntityToggleMine(type, self, xcoord, ycoord, 1)
+            #elif type == 23:
+            #    entity = EntityLaser(type, self, xcoord, ycoord, orientation, mode)
             elif type == 24:
                 entity = EntityBoostPad(type, self, xcoord, ycoord)
             elif type == 25:
@@ -2013,6 +2044,58 @@ def get_single_closest_point(sim, xpos, ypos, radius):
             closest_point = (a, b)
             result = -1 if is_back_facing else 1
     return result, closest_point
+
+def get_raycast_distance(sim, xpos, ypos, dx, dy):
+    xcell = math.floor(xpos/24)
+    ycell = math.floor(ypos/24)
+    if dx > 0:
+        step_x = 1
+        delta_x = 24 / dx
+        tmax_x = ((xcell + 1)*24 - xpos) / dx
+    elif dx < 0:
+        step_x = -1
+        delta_x = -24 / dx
+        tmax_x = (xcell*24 - xpos) / dx
+    else:
+        step_x = 0
+        delta_x = 0
+        tmax_x = 999999
+    if dy > 0:
+        step_y = 1
+        delta_y = 24 / dy
+        tmax_y = ((ycell + 1)*24 - ypos) / dy
+    elif dy < 0:
+        step_y = -1
+        delta_y = -24 / dy
+        tmax_y = (ycell*24 - ypos) / dy
+    else:
+        step_y = 0
+        delta_y = 0
+        tmax_y = 999999
+    while True:
+        result = intersect_ray_vs_cell_contents(sim, xcell, ycell, xpos, ypos, 2000*dx, 2000*dy)
+        if result < 1:
+            return 2000 * result
+        if tmax_x < tmax_y:
+            xcell += step_x
+            if xcell < 0 or xcell >= 44:
+                return
+            tmax_x += delta_x
+        else:
+            ycell += step_y
+            if ycell < 0 or ycell >= 25:
+                return
+            tmax_y += delta_y
+            
+def intersect_ray_vs_cell_contents(sim, xcell, ycell, xpos, ypos, dx, dy):
+    segments = sim.segment_dic[clamp_cell(xcell, ycell)]
+    shortest_time = 1
+    for segment in segments:
+        time = segment.intersect_with_ray(xpos, ypos, dx, dy, 0)
+        shortest_time = min(time, shortest_time)
+    return shortest_time
+
+
 
 def overlap_circle_vs_circle(xpos1, ypos1, radius1, xpos2, ypos2, radius2):
     """Given two cirles definied by their center and radius, return true if they overlap."""

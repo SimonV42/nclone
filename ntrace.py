@@ -39,7 +39,7 @@ if os.path.isfile(RAW_INPUTS_0):
         if COMPRESSED_INPUTS:
             inputs_list.append([int(b) for b in zlib.decompress(f.read())])
         else:
-            inputs_list.append([int(b) for b in f.read()][215:])
+            inputs_list.append([int(b) for b in f.read()][215:515])
 if os.path.isfile(RAW_INPUTS_1):
     with open(RAW_INPUTS_1, "rb") as f:
         if COMPRESSED_INPUTS:
@@ -135,9 +135,10 @@ for i in range(len(inputs_list)):
 
     #Print info useful for debug if in manual mode
     if not OUTTE_MODE:
-        print(sim.ninja.speedlog)
-        print(sim.ninja.poslog)
-        print(valid)
+        #print(sim.ninja.speedlog)
+        #print(sim.ninja.poslog)
+        #print(valid)
+        print(sim.entity_dic[23][0].llog)
 
 #Plot the route. Only ran in manual mode.
 if tool_mode == "trace" and OUTTE_MODE == False:
@@ -177,7 +178,7 @@ if tool_mode == "trace" and OUTTE_MODE == False:
                     x1, y1 = x2, y2
     lc = mc.LineCollection(lines)
     ax.add_collection(lc)
-    mpl.show()
+    #mpl.show()
             
 #For each replay, write to file whether it is valid or not, then write the series 
 #of coordinates for each frame. Only ran in outte mode and in trace mode.

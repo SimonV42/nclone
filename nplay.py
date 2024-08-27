@@ -205,6 +205,11 @@ def entitydraw(init):
                     radius = entity.SEMI_SIDE*adjust
                     context.rectangle(x - radius, y - radius, radius * 2, radius * 2)
                     context.fill()
+            if entity.type == 23:
+                context.set_line_width(1)
+                context.move_to(x, y)
+                context.line_to(entity.xend*adjust, entity.yend*adjust)
+                context.stroke()
 
     context.set_source_rgb(*hex2float(NINJACOLOR))
     context.set_line_width(NINJAWIDTH*adjust)

@@ -43,13 +43,12 @@ class Ninja:
     #12:Side to side, 13:Clutch to the sky, 14:Frontflip, 15:Waving, 16:On one leg, 17:Backflip,
     #18:Kneeling, 19:Fall to the floor, 20:Russian squat dance (classic version), 21:Kick
     DANCE_RANDOM = True #Choose whether the victory dance is picked randomly.
-    DANCE_ID_DEFAULT = 10 #Choose the id of the dance that will always play if DANCE_RANDOM is false.
+    DANCE_ID_DEFAULT = 0 #Choose the id of the dance that will always play if DANCE_RANDOM is false.
     DANCE_DIC = {0:(104, 104), 1:(106, 225), 2:(226, 345), 3:(346, 465), 4:(466, 585), 5:(586, 705),
                  6:(706, 825), 7:(826, 945), 8:(946, 1065), 9:(1066, 1185), 10:(1186, 1305),
                  11:(1306, 1485), 12:(1486, 1605), 13:(1606, 1664), 14:(1665, 1731), 15:(1732, 1810),
                  16:(1811, 1852), 17:(1853, 1946), 18:(1947, 2004), 19:(2005, 2156), 20:(2157, 2241),
                  21:(2242, 2295)}
-                 
 
     def __init__(self, sim):
         """Initiate ninja position at spawn point, and initiate other values to their initial state"""
@@ -359,7 +358,7 @@ class Ninja:
         self.yspeed += self.ylp_boost_normalized * boost_scalar * 2/3
         
     def think(self):
-        """This function handle all the ninja's actions depending of the inputs and its environment."""
+        """This function handles all the ninja's actions depending of the inputs and its environment."""
         #Logic to determine if you're starting a new jump.
         if not self.jump_input:
             new_jump_check = False
@@ -399,7 +398,7 @@ class Ninja:
         if not self.airborn:
             self.floor_buffer = 0
 
-        #This part deals with the special states: awaiting death or celebrating.
+        #This part deals with the special states: dead, awaiting death, celebrating, disabled.
         if self.state in (6, 9):
             return
         if self.state == 7:
@@ -819,6 +818,7 @@ class Entity:
 
 
 class EntityToggleMine(Entity):
+    """This class handles both toggle mines (untoggled state) and regular mines (toggled state)."""
     RADII = {0:4, 1:3.5, 2:4.5} #0:toggled, 1:untoggled, 2:toggling
 
     def __init__(self, type, sim, xcoord, ycoord, state):
@@ -828,22 +828,24 @@ class EntityToggleMine(Entity):
         self.set_state(state)
 
     def think(self):
+        """Handle interactions between the ninja and the untoggled mine"""
         ninja = self.sim.ninja
         if ninja.is_valid_target():
-            if self.state == 1:
+            if self.state == 1: #Set state to toggling if ninja touches untoggled mine
                 if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
                                             ninja.xpos, ninja.ypos, ninja.RADIUS):
                     self.set_state(2)
-            elif self.state == 2:
+            elif self.state == 2: #Set state to toggled if ninja stops touching toggling mine
                 if not overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
                                                 ninja.xpos, ninja.ypos, ninja.RADIUS):
                     self.set_state(0)
                     self.log(2)
-        else:
+        else: #Set state to untoggled if ninja dies while toggling a mine
             if self.state == 2 and ninja.state == 6:
                 self.set_state(1)
 
     def logical_collision(self):
+        """Kill the ninja if it touches a toggled mine"""
         ninja = self.sim.ninja
         if ninja.is_valid_target() and self.state == 0: 
             if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
@@ -867,12 +869,12 @@ class EntityGold(Entity):
         self.collected = False
         
     def logical_collision(self):
-        """If the ninja is colliding with the piece of gold, store the collection frame."""
+        """The gold is collected if touches by a ninja that is not in winning state."""
         ninja = self.sim.ninja
         if ninja.state != 8:
             if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
                                         ninja.xpos, ninja.ypos, ninja.RADIUS):
-                self.collected = True
+                self.sim.gold_collected += 1
                 self.active = False
                 self.log()
 
@@ -883,14 +885,14 @@ class EntityExit(Entity):
     def __init__(self, type, sim, xcoord, ycoord):
         super().__init__(type, sim, xcoord, ycoord)
         self.is_logical_collidable = True
-        self.ninja_exit = []
 
     def logical_collision(self):
-        """If the ninja is colliding with the open door, store the collision frame."""
+        """The ninja wins if it touches the exit door. The door is not interactable from the entity
+        grid before the exit switch is collected.
+        """
         ninja = self.sim.ninja
         if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
-            self.ninja_exit.append(self.sim.frame)
             ninja.win()
 
 
@@ -904,17 +906,19 @@ class EntityExitSwitch(Entity):
         self.parent = parent
 
     def logical_collision(self):
-        """If the ninja is colliding with the switch, flag it as being collected, and open its associated door."""
+        """If the ninja is colliding with the switch, open its associated door. This is done in practice
+        by adding the parent door entity to the entity grid.
+        """
         ninja = self.sim.ninja
         if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
-            self.collected = True
             self.active = False
             self.sim.grid_entity[self.parent.cell].append(self.parent) #Add door to the entity grid so the ninja can touch it
             self.log()
 
 
 class EntityDoorBase(Entity):
+    """Parent class that all door type entities inherit from : regular doors, locked doors, trap doors."""
     def __init__(self, type, sim, xcoord, ycoord, orientation, sw_xcoord, sw_ycoord):
         super().__init__(type, sim, xcoord, ycoord)
         self.is_logical_collidable = True
@@ -973,14 +977,17 @@ class EntityDoorRegular(EntityDoorBase):
         self.open_timer = 0
 
     def think(self):
-        """If the door has been opened for more than 5 frames without being touched by the ninja, close it."""
+        """If the door has been opened for more than 5 frames without being touched by the ninja, 
+        close it.
+        """
         if not self.closed:
             self.open_timer += 1
             if self.open_timer > 5:
                 self.change_state(closed = True)
 
     def logical_collision(self):
-        """If the ninja touches the activation region of the door, open it."""
+        """If the ninja touches the activation region of the door (circle with a radius of 10 at the
+        door's center), open it."""
         ninja = self.sim.ninja
         if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
@@ -1058,6 +1065,9 @@ class EntityOneWayPlatform(Entity):
         self.normal_x, self.normal_y = map_orientation_to_vector(orientation)
 
     def calculate_depenetration(self, ninja):
+        """Return the depenetration vector between the ninja and the one way. Return nothing if no
+        penetration.
+        """
         dx = ninja.xpos - self.xpos
         dy = ninja.ypos - self.ypos
         lateral_dist = dy * self.normal_x - dx * self.normal_y
@@ -1075,9 +1085,11 @@ class EntityOneWayPlatform(Entity):
                         return (self.normal_x, self.normal_y), (ninja.RADIUS - normal_dist, 0)
 
     def physical_collision(self):
+        """Return depenetration between ninja and one way (None if no penetration)."""
         return self.calculate_depenetration(self.sim.ninja)
 
     def logical_collision(self):
+        """Return wall normal if the ninja enters walled state from entity, else return None."""
         collision_result = self.calculate_depenetration(self.sim.ninja)
         if collision_result:
             if abs(self.normal_x) == 1:
@@ -1085,9 +1097,13 @@ class EntityOneWayPlatform(Entity):
 
 
 class EntityDroneBase(Entity):
+    """Parent class that all drone type entities inherit from."""
     RADIUS = 7.5
     GRID_WIDTH = 24
     DIR_TO_VEC = {0:[1, 0], 1:[0, 1], 2:[-1, 0], 3:[0, -1]}
+    #Dictionary to choose the next direction from the patrolling mode of the drone.
+    #Patrolling modes : {0:follow wall CW, 1:follow wall CCW, 2:wander CW, 3:wander CCW}
+    #Directions : {0:keep forward, 1:turn right, 2:go backward, 3:turn left}
     DIR_LIST = {0:[1, 0, 3, 2], 1:[3, 0, 1, 2], 2:[0, 1, 3, 2], 3:[0, 3, 1, 2]}
 
     def __init__(self, type, sim, xcoord, ycoord, orientation, mode, speed):
@@ -1101,11 +1117,16 @@ class EntityDroneBase(Entity):
         self.xpos2, self.ypos2 = self.xpos, self.ypos
 
     def move(self):
+        """Make the drone move along the grid. The drone will try to move towards the center of an
+        adjacent cell. When at the center of that cell, it will then choose the next cell to move
+        towards.
+        """
         xspeed = self.speed * self.DIR_TO_VEC[self.dir][0]
         yspeed = self.speed * self.DIR_TO_VEC[self.dir][1]
         dx = self.xtarget - self.xpos
         dy = self.ytarget - self.ypos
         dist = math.sqrt(dx**2 + dy**2)
+        #If the drone has reached or passed the center of the cell, choose the next cell to go to.
         if dist < 0.000001 or (dx * (self.xtarget - (self.xpos + xspeed)) + dy * (self.ytarget - (self.ypos + yspeed))) < 0:
             self.xpos, self.ypos = self.xtarget, self.ytarget
             can_move = self.choose_next_direction_and_goal()
@@ -1113,6 +1134,7 @@ class EntityDroneBase(Entity):
                 disp = self.speed - dist
                 self.xpos += disp * self.DIR_TO_VEC[self.dir][0]
                 self.ypos += disp * self.DIR_TO_VEC[self.dir][1]
+        #Otherwise, make the drone keep moving along its current direction.
         else:
             xspeed = self.speed * self.DIR_TO_VEC[self.dir][0]
             yspeed = self.speed * self.DIR_TO_VEC[self.dir][1]
@@ -1121,6 +1143,9 @@ class EntityDroneBase(Entity):
             self.grid_move()
         
     def choose_next_direction_and_goal(self):
+        """Return true if the drone can move in at least one of four directions.
+        The directions are tested in the order according to the drone's preference depending of its mode.
+        """
         for i in range(4):
             new_dir = (self.dir + self.DIR_LIST[self.mode][i]) % 4
             valid_dir = self.test_next_direction_and_goal(new_dir)
@@ -1131,6 +1156,9 @@ class EntityDroneBase(Entity):
         return False
 
     def test_next_direction_and_goal(self, dir):
+        """Return true if the drone can move to the adjacent cell along the given direction.
+        This is true if there are no walls impeding the drone's movement.
+        If true, set the center of the adjacent cell as the drone's next target."""
         xdir, ydir = self.DIR_TO_VEC[dir]
         xtarget = self.xpos + self.GRID_WIDTH*xdir
         ytarget = self.ypos + self.GRID_WIDTH*ydir
@@ -1162,6 +1190,7 @@ class EntityDroneZap(EntityDroneBase):
         self.is_logical_collidable = True
     
     def logical_collision(self):
+        """Kill the ninja if it touches the regular drone."""
         ninja = self.sim.ninja
         if ninja.is_valid_target():
             if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
@@ -1178,6 +1207,7 @@ class EntityDroneChaser(EntityDroneZap):
         self.chasing = False
 
     def think(self):
+        #TODO
         if not self.chasing:
             ninja = self.sim.ninja
             if ninja.is_valid_target():
@@ -1189,6 +1219,7 @@ class EntityDroneChaser(EntityDroneZap):
                             pass
 
     def choose_next_direction_and_goal(self):
+        #TODO
         super().choose_next_direction_and_goal()
         
 
@@ -1261,6 +1292,9 @@ class EntityThwump(Entity):
         self.state = 0 #0:immobile, 1:forward, -1:backward
 
     def move(self):
+        """Update the position of the thwump only if it is already moving. If the thwump retracts past
+        its origin, it will stop moving.
+        """
         if self.state: #If not immobile.
             speed = self.FORWARD_SPEED if self.state == 1 else self.BACKWARD_SPEED
             speed_dir = self.direction * self.state
@@ -1335,11 +1369,15 @@ class EntityThwump(Entity):
                             self.state = 1
 
     def physical_collision(self):
+        """Return the depenetration vector for the ninja if it collides with the thwump."""
         ninja = self.sim.ninja
         return penetration_square_vs_point(self.xpos, self.ypos, ninja.xpos, ninja.ypos,
                                            self.SEMI_SIDE + ninja.RADIUS)
     
     def logical_collision(self):
+        """Return the wall normal if the ninja can interact with a thwump's side.
+        Kill the ninja if it touches the lethal region on the thwump's charging face.
+        """
         ninja = self.sim.ninja
         if ninja.is_valid_target():
             depen = penetration_square_vs_point(self.xpos, self.ypos, ninja.xpos, ninja.ypos,
@@ -1374,10 +1412,12 @@ class EntityLaser(Entity):
         self.llog = []
 
     def think(self):
+        #TODO
         if self.mode == "spinner":
             self.think_spinner()
 
     def think_spinner(self):
+        #TODO
         angle_new = (self.angle + self.SPIN_SPEED*self.dir) % (2*math.pi)
         dx = math.cos(self.angle)
         dy = math.sin(self.angle)
@@ -1432,6 +1472,8 @@ class EntityDeathBall(Entity):
         self.xspeed, self.yspeed = 0, 0
 
     def think(self):
+        """Make the ball move towards the closest ninja. Handle collision with tiles and bounces
+        against other balls and ninjas."""
         ninja = self.sim.ninja
         if not ninja.is_valid_target(): #If no valid targets, decelerate ball to a stop
             self.xspeed *= self.DRAG_NO_TARGET
@@ -1515,7 +1557,7 @@ class EntityDeathBall(Entity):
         self.grid_move()
         
     def logical_collision(self):
-        pass
+        """If the ninja touches the ball, kill it and make the ball bounce from it."""
         ninja = self.sim.ninja
         if ninja.is_valid_target():
             if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
@@ -1536,6 +1578,7 @@ class EntityMiniDrone(EntityDroneBase):
         self.GRID_WIDTH = 12
     
     def logical_collision(self):
+        """Kill the ninja if it touches the mini drone."""
         ninja = self.sim.ninja
         if ninja.is_valid_target():
             if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
@@ -1604,6 +1647,9 @@ class EntityShoveThwump(Entity):
         self.grid_move()
             
     def physical_collision(self):
+        """Return the depenetration vector for the ninja if it collides with the shwump.
+        Note that if the shwump is in activated state, only one of its sides is collidable.
+        """
         ninja = self.sim.ninja
         if self.state <= 1:
             depen = penetration_square_vs_point(self.xpos, self.ypos, ninja.xpos, ninja.ypos,
@@ -1614,6 +1660,9 @@ class EntityShoveThwump(Entity):
                     return depen
 
     def logical_collision(self):
+        """Return the wall normal if the ninja interacts with an active vertical side.
+        Kill the ninja if it touches the lethal core of the shwump.
+        """
         ninja = self.sim.ninja
         depen = penetration_square_vs_point(self.xpos, self.ypos, ninja.xpos, ninja.ypos,
                                             self.SEMI_SIDE + ninja.RADIUS + 0.1)
@@ -1710,6 +1759,7 @@ class Simulator:
         """From the given map data, initiate the level geometry, the entities and the ninja."""
         self.frame = 0
         self.entitylog = []
+        self.gold_collected = 0
 
         #initiate a dictionary mapping each tile id to its cell. Start by filling it with full tiles (id of 1).
         self.tile_dic = {}
@@ -1964,7 +2014,9 @@ def sweep_circle_vs_tiles(sim, xpos_old, ypos_old, dx, dy, radius):
     return shortest_time
 
 def get_time_of_intersection_circle_vs_circle(xpos, ypos, vx, vy, a, b, radius):
-    """Return time of intersection by interpolation by sweeping a circle onto an other circle, given a combined radius."""
+    """Return time of intersection by interpolation by sweeping a circle onto an other circle, 
+    given a combined radius.
+    """
     dx = xpos - a
     dy = ypos - b
     dist_sq = dx**2 + dy**2
@@ -2046,6 +2098,10 @@ def get_single_closest_point(sim, xpos, ypos, radius):
     return result, closest_point
 
 def get_raycast_distance(sim, xpos, ypos, dx, dy):
+    """Return the length of a ray given its start point and direction. The ray stops when it hits a
+    tile. Return None if the ray hits nothing after travelling for 2000 units. The algorithm works by
+    finding the cells the ray traverse and testing it against the tile segments for each cell.
+    """
     xcell = math.floor(xpos/24)
     ycell = math.floor(ypos/24)
     if dx > 0:
@@ -2088,14 +2144,15 @@ def get_raycast_distance(sim, xpos, ypos, dx, dy):
             tmax_y += delta_y
             
 def intersect_ray_vs_cell_contents(sim, xcell, ycell, xpos, ypos, dx, dy):
+    """Given a cell and a ray, return the shortest time of intersection between the ray and one of
+    the cell's tile segments. Return 1 if the ray hits nothing.
+    """
     segments = sim.segment_dic[clamp_cell(xcell, ycell)]
     shortest_time = 1
     for segment in segments:
         time = segment.intersect_with_ray(xpos, ypos, dx, dy, 0)
         shortest_time = min(time, shortest_time)
     return shortest_time
-
-
 
 def overlap_circle_vs_circle(xpos1, ypos1, radius1, xpos2, ypos2, radius2):
     """Given two cirles definied by their center and radius, return true if they overlap."""

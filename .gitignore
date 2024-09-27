@@ -1,5 +1,6 @@
 anim_data_line_new.txt.bin
 inputs_episode
+inputs
 inputs_0
 inputs_1
 inputs_2
@@ -10,3 +11,4 @@ map_data_1
 map_data_2
 map_data_3
 map_data_4
+ntrace_manual.py

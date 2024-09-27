@@ -728,9 +728,9 @@ class GridSegmentLinear:
         return is_back_facing, a, b
     
     def intersect_with_ray(self, xpos, ypos, dx, dy, radius):
-        """Return the time of intersection (as a fraction of a frame) for the
-        closest point in the ninja's path. Return 0 if the ninja is already 
-        intersecting or 1 if won't intersect within the frame.
+        """Return the time of intersection (as a fraction of a frame) for the collision
+        between the segment and a circle moving along a given direction. Return 0 if the circle 
+        is already intersecting or 1 if it won't intersect within the frame.
         """
         time1 = get_time_of_intersection_circle_vs_circle(xpos, ypos, dx, dy, self.x1, self.y1, radius)
         time2 = get_time_of_intersection_circle_vs_circle(xpos, ypos, dx, dy, self.x2, self.y2, radius)
@@ -778,8 +778,9 @@ class GridSegmentCircular:
         return is_back_facing, a, b
     
     def intersect_with_ray(self, xpos, ypos, dx, dy, radius):
-        """Return the time of intersection (as a fraction of a frame) for the closest point in the ninja's path.
-        Return 0 if the ninja is already intersection or 1 if won't intersect within the frame.
+        """Return the time of intersection (as a fraction of a frame) for the collision
+        between the segment and a circle moving along a given direction. Return 0 if the circle 
+        is already intersecting or 1 if it won't intersect within the frame.
         """
         time1 = get_time_of_intersection_circle_vs_circle(xpos, ypos, dx, dy, self.p_hor[0], self.p_hor[1], radius)
         time2 = get_time_of_intersection_circle_vs_circle(xpos, ypos, dx, dy, self.p_ver[0], self.p_ver[1], radius)
@@ -1399,21 +1400,36 @@ class EntityThwump(Entity):
 
 
 class EntityLaser(Entity):
+    RADIUS = 5.9
     SPIN_SPEED = 0.010471975 #roughly 2pi/600
+    SURFACE_FLAT_SPEED = 0.1
+    SURFACE_CORNER_SPEED = 0.005524805665672641 #roughly 0.1/(5.9*pi)
 
     def __init__(self, type, sim, xcoord, ycoord, orientation, mode):
         super().__init__(type, sim, xcoord, ycoord)
         self.is_thinkable = True
-        self.mode = "spinner"
-        self.xend, self.yend = self.xpos, self.ypos
-        dx, dy = map_orientation_to_vector(orientation)
-        self.angle = math.atan2(dy, dx)
-        self.dir = -1 if mode == 1 else 1
-        self.llog = []
+        #Find out what is the laser mode : spinner or surface. Surface mode if segment close enough.
+        result, closest_point = get_single_closest_point(self.sim, self.xpos, self.ypos, 12)
+        if result == -1:
+            self.mode = 1
+        else:
+            dist = math.sqrt((closest_point[0] - self.xpos)**2 + (closest_point[1] - self.ypos)**2)
+            self.mode = 1 if dist < 7 else 0
+        if self.mode == 0: #Spinner mode
+            self.xend, self.yend = self.xpos, self.ypos
+            dx, dy = map_orientation_to_vector(orientation)
+            self.angle = math.atan2(dy, dx)
+            self.dir = -1 if mode == 1 else 1
+        elif self.mode == 1: #Surface mode
+            self.xvec, self.yvec = 0, 0
+            self.angle = 0
+            self.dir = -1 if mode == 1 else 1
+            self.sx, self.sy = 0, 0
+            
 
     def think(self):
         #TODO
-        if self.mode == "spinner":
+        if self.mode == 0:
             self.think_spinner()
 
     def think_spinner(self):
@@ -1422,10 +1438,62 @@ class EntityLaser(Entity):
         dx = math.cos(self.angle)
         dy = math.sin(self.angle)
         self.len = get_raycast_distance(self.sim, self.xpos, self.ypos, dx, dy)
-        self.xend = self.xpos + dx*self.len
-        self.yend = self.ypos + dy*self.len
-        self.llog.append((self.len, self.xend, self.yend))
+        if self.len:
+            self.xend = self.xpos + dx*self.len
+            self.yend = self.ypos + dy*self.len
+        else:
+            self.xend = self.xpos
+            self.yend = self.ypos
+        ninja = self.sim.ninja
+        if ninja.is_valid_target():
+            if raycast_vs_player(self.sim, self.xpos, self.ypos, ninja.xpos, ninja.ypos, ninja.RADIUS):
+                ninja_angle = math.atan2(ninja.ypos-self.ypos, ninja.xpos-self.xpos)
+                angle_diff = abs(self.angle - ninja_angle) % (2*math.pi)
+                if angle_diff <= 0.0052359875:
+                    ninja.kill(0, 0, 0, 0, 0)
+                else:
+                    if check_lineseg_vs_ninja(self.xpos, self.ypos, self.xend, self.yend, ninja):
+                        ninja.kill(0, 0, 0, 0, 0)
         self.angle = angle_new
+
+    def think_surface(self):
+        segments = gather_segments_from_region(self.sim, self.xpos-12, self.ypos-12,
+                                               self.xpos+12, self.ypos+12)
+        if not segments:
+            return
+        while True:
+            xspeed = -self.dir*self.yvec*self.SURFACE_FLAT_SPEED
+            yspeed = self.dir*self.xvec*self.SURFACE_FLAT_SPEED
+            xpos_new = self.xpos + xspeed
+            ypos_new = self.ypos + yspeed
+            shortest_distance = 9999999
+            result = 0
+            closest_point = (0, 0)
+            for segment in segments:
+                is_back_facing, a, b = segment.get_closest_point(xpos_new, ypos_new)
+                distance_sq = (xpos_new - a)**2 + (ypos_new - b)**2
+                if distance_sq < shortest_distance:
+                    shortest_distance = distance_sq
+                    closest_point = (a, b)
+                    result = -1 if is_back_facing else 1
+            dx = xpos_new - closest_point[0]
+            dy = ypos_new - closest_point[1]
+            if ((self.xpos - self.sx)*dx + (self.ypos - self.sy)*dy) > 0.01 and segment.oriented:
+                dist = math.sqrt((closest_point[0] - self.sx)**2 + (closest_point[1] - self.sy)**2)
+                if dist >= 0.0000001:
+                    pass
+                else:
+                    angle = math.atan2(self.yvec, self.xvec)
+                    angle += self.dir*self.SURFACE_CORNER_SPEED
+                    self.xvec = math.cos(angle)
+                    self.yvec = math.sin(angle)
+
+
+            
+            
+            
+
+        
 
 
 class EntityBoostPad(Entity):
@@ -1916,8 +1984,8 @@ class Simulator:
                 entity = EntityThwump(type, self, xcoord, ycoord, orientation)
             elif type == 21:
                 entity = EntityToggleMine(type, self, xcoord, ycoord, 1)
-            #elif type == 23:
-            #    entity = EntityLaser(type, self, xcoord, ycoord, orientation, mode)
+            elif type == 23:
+                entity = EntityLaser(type, self, xcoord, ycoord, orientation, mode)
             elif type == 24:
                 entity = EntityBoostPad(type, self, xcoord, ycoord)
             elif type == 25:
@@ -2100,7 +2168,7 @@ def get_single_closest_point(sim, xpos, ypos, radius):
 def get_raycast_distance(sim, xpos, ypos, dx, dy):
     """Return the length of a ray given its start point and direction. The ray stops when it hits a
     tile. Return None if the ray hits nothing after travelling for 2000 units. The algorithm works by
-    finding the cells the ray traverse and testing it against the tile segments for each cell.
+    finding the cells the ray traverses and testing it against the tile segments for each cell.
     """
     xcell = math.floor(xpos/24)
     ycell = math.floor(ypos/24)
@@ -2153,6 +2221,53 @@ def intersect_ray_vs_cell_contents(sim, xcell, ycell, xpos, ypos, dx, dy):
         time = segment.intersect_with_ray(xpos, ypos, dx, dy, 0)
         shortest_time = min(time, shortest_time)
     return shortest_time
+
+def raycast_vs_player(sim, xstart, ystart, ninja_xpos, ninja_ypos, ninja_radius):
+    """Draw a segment that starts at a given position and goes towards the center of the ninja.
+    Return true if the segment touches the ninja, meaning there were no tile segments in its path.
+    """
+    dx = ninja_xpos - xstart
+    dy = ninja_ypos - ystart
+    dist = math.sqrt(dx**2 + dy**2)
+    if ninja_radius <= dist and dist > 0:
+        dx /= dist
+        dy /= dist
+        length = get_raycast_distance(sim, xstart, ystart, dx, dy)
+        return length > dist - ninja_radius
+    return True
+
+def check_lineseg_vs_ninja(x1, y1, x2, y2, ninja):
+    #TODO
+    dx = x2 - x1
+    dy = y2 - y1
+    len = math.sqrt(dx**2 + dy**2)
+    if len == 0:
+        return False
+    #This part returns false if the segment does not interscet the ninja's circular hitbox, to speed things up.
+    dx /= len
+    dy /= len
+    proj = (ninja.xpos - x1)*dx + (ninja.ypos - y1)*dy
+    x = x1
+    y = y1
+    if proj > 0:
+        x += dx*proj
+        y += dy*proj
+    if ninja.RADIUS**2 <= (ninja.xpos - x)**2 + (ninja.ypos - y)**2:
+        return False
+    #Now test the segment against each of ninja's 11 segments. Return true if it intersects any.
+    NINJA_SEGS = ((0, 12), (1, 12), (2, 8), (3, 9), (4, 10), (5, 11), (6, 7), (8, 0), (9, 0), (10, 1), (11, 1))
+    for seg in NINJA_SEGS:
+        x3 = ninja.xpos + 24*ninja.bones[seg[0]][0]
+        y3 = ninja.ypos + 24*ninja.bones[seg[0]][1]
+        x4 = ninja.xpos + 24*ninja.bones[seg[1]][0]
+        y4 = ninja.ypos + 24*ninja.bones[seg[1]][1]
+        det1 = (x1 - x3)*(y2 - y3) - (y1 - y3)*(x2 - x3)
+        det2 = (x1 - x4)*(y2 - y4) - (y1 - y4)*(x2 - x4)
+        det3 = (x3 - x1)*(y4 - y1) - (y3 - y1)*(x4 - x1)
+        det4 = (x3 - x2)*(y4 - y2) - (y3 - y2)*(x4 - x2)
+        if det1*det2 < 0 and det3*det4 < 0:
+            return True
+    return False
 
 def overlap_circle_vs_circle(xpos1, ypos1, radius1, xpos2, ypos2, radius2):
     """Given two cirles definied by their center and radius, return true if they overlap."""

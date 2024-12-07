@@ -46,8 +46,6 @@ elif tool_mode == "splits":
 HOR_INPUTS_DIC = {0:0, 1:0, 2:1, 3:1, 4:-1, 5:-1, 6:-1, 7:-1}
 JUMP_INPUTS_DIC = {0:0, 1:1, 2:0, 3:1, 4:0, 5:1, 6:0, 7:1}
 
-xposlog = []
-yposlog = []
 goldlog = []
 frameslog = []
 validlog = []
@@ -84,14 +82,19 @@ for i in range(len(inputs_list)):
             break
 
     #Append to the logs for each replay.
-    xposlog.append(sim.ninja.xposlog)
-    yposlog.append(sim.ninja.yposlog)
     goldlog.append(sim.gold_collected)
     frameslog.append(inp_len)
     validlog.append(valid)
     collisionlog.append(sim.collisionlog)
-    entities = [(0, i, list(zip(sim.ninja.xposlog, sim.ninja.yposlog)))]
-    entities += [(e.type, e.index, e.poslog) for l in sim.entity_dic.values() for e in l if e.log_positions]
+    poslog = array.array('h')
+    for xpos, ypos in zip(sim.ninja.xposlog, sim.ninja.yposlog):
+        poslog.append(pack_coord(xpos))
+        poslog.append(pack_coord(ypos))
+    chunks = array.array('H')
+    chunks.append(0)
+    chunks.append(round(len(poslog) / 2))
+    entities = [(0, i, chunks, poslog)]
+    entities += [(e.type, e.index, e.exported_chunks, e.poslog) for l in sim.entity_dic.values() for e in l if e.log_positions]
     entitylog.append(entities)
 
             
@@ -108,15 +111,15 @@ if tool_mode == "trace":
             f.write(struct.pack('<H', entities))
             for j in range(entities):
                 entity = entitylog[i][j]
-                frames = len(entity[2])
-                f.write(struct.pack('<BHH', *(entity[:2] + (frames,))))
-                for frame in range(frames):
-                    f.write(struct.pack('<2d', *entity[2][frame]))
+                id, index, chunk_count = entity[0], entity[1], round(len(entity[2]) / 2)
+                f.write(struct.pack('<BHH', id, index, chunk_count))
+                entity[2].tofile(f)
+                entity[3].tofile(f)
             # Collision section
             collisions = len(collisionlog[i])
             f.write(struct.pack('<L', collisions))
-            for col in range(collisions):
-                f.write(struct.pack('<HBHB', *collisionlog[i][col]))
+            for col in collisionlog[i]:
+                f.write(col)
     print("%.3f" % ((90 * 60 - frameslog[0] + 1 + goldlog[0] * 120) / 60))
 
 #For each level of the episode, write to file whether the replay is valid, then write the score split. 

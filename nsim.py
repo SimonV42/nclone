@@ -1,18 +1,29 @@
+import argparse
+import array
 import math
 from itertools import product
 import os.path
 import struct
 import copy
 import random
+import sys
 
+#Create argument parser so that we can pass parameters when executing the tool
+#Run the tool with the -h option to see the complete help
+parser = argparse.ArgumentParser(description='N++ physics clone')
+parser.add_argument('--basic-sim', action='store_true', help='Only simulate entities with physical collision')
+parser.add_argument('--full-export', action='store_true', help="Export coordinates of moving entities")
+parser.add_argument('-t', '--tolerance', type=float, default=1.0, help='Minimum units to consider an entity moved')
+ARGUMENTS = parser.parse_args()
 
-NINJA_ANIM_MODE = True
-if os.path.isfile("anim_data_line_new.txt.bin"):
-    with open("anim_data_line_new.txt.bin", mode="rb") as f:
+#Simulate ragdoll physics
+ANIM_DATA = "anim_data_line_new.txt.bin"
+NINJA_ANIM_MODE = not ARGUMENTS.basic_sim and os.path.isfile(ANIM_DATA)
+
+if NINJA_ANIM_MODE:
+    with open(ANIM_DATA, mode="rb") as f:
         frames = struct.unpack('<L', f.read(4))[0]
         ninja_animation = [[list(struct.unpack('<2d', f.read(16))) for _ in range(13)] for _ in range(frames)]
-else:
-    NINJA_ANIM_MODE = False
 
 
 class Ninja:
@@ -83,10 +94,11 @@ class Ninja:
         self.bones = [[0, 0] for _ in range(13)]
         self.update_graphics()
         self.ragdoll = Ragdoll()
-        self.poslog = [(0, self.xpos, self.ypos)] #Used for debug
-        self.speedlog = [(0,0,0)]
-        self.xposlog = [self.xpos] #Used to produce trace
-        self.yposlog = [self.ypos]
+        self.poslog = [] #Used for debug
+        self.speedlog = []
+        self.xposlog = [] #Used to produce trace
+        self.yposlog = []
+        self.log()
         
     def integrate(self):
         """Update position and speed by applying drag and gravity before collision phase."""
@@ -639,6 +651,13 @@ class Ninja:
         """Return whether the ninja is a valid target for various interactions."""
         return not self.state in (6, 8, 9)
 
+    def log(self):
+        """Log position and velocity vectors of the ninja for the current frame"""
+        self.poslog.append((self.sim.frame, round(self.xpos, 6), round(self.ypos, 6)))
+        self.speedlog.append((self.sim.frame, round(self.xspeed, 6), round(self.yspeed, 6)))
+        self.xposlog.append(self.xpos)
+        self.yposlog.append(self.ypos)
+
 
 class Ragdoll:
     """None of this is working yet. Might never will."""
@@ -791,18 +810,29 @@ class GridSegmentCircular:
 
 class Entity:
     """Class that all entity types (gold, bounce blocks, thwumps, etc.) inherit from."""
+    entity_counts = [0] * 40
+
     def __init__(self, type, sim, xcoord, ycoord):
         """Inititate a member from map data"""
         self.type = type
+        self.index = self.entity_counts[self.type]
+        self.entity_counts[self.type] += 1
         self.sim = sim
         self.xpos = xcoord*6
         self.ypos = ycoord*6
+        self.poslog = array.array('h')
         self.active = True
         self.is_logical_collidable = False
         self.is_physical_collidable = False
         self.is_movable = False
         self.is_thinkable = False
-        self.cell = clamp_cell(math.floor(self.xpos / 24), math.floor(self.ypos / 24))        
+        self.log_positions = False
+        self.log_collisions = True
+        self.cell = clamp_cell(math.floor(self.xpos / 24), math.floor(self.ypos / 24))
+        self.last_exported_state = None
+        self.last_exported_frame = None
+        self.last_exported_coords = None
+        self.exported_chunks = array.array('H')
     
     def grid_move(self):
         """As the entity is moving, if its center goes from one grid cell to another,
@@ -814,9 +844,32 @@ class Entity:
             self.cell = cell_new
             self.sim.grid_entity[self.cell].append(self)
 
-    def log(self, state=1):
-        self.sim.entitylog.append((self.sim.frame, self.type, self.xpos, self.ypos, state))
+    def log_collision(self, state=1):
+        """Log an interaction with this entity"""
+        if self.log_collisions and self.sim.frame > 0 and state != self.last_exported_state:
+            self.sim.collisionlog.append(struct.pack('<HBHB', self.sim.frame, self.type, self.index, state))
+            self.last_exported_state = state
 
+    def log_position(self):
+        """Log position of entity on current frame"""
+        # Only export position if enabled and the entity has moved enough
+        if not (self.active and self.log_positions):
+            return
+        last = self.last_exported_coords
+        dist = abs(last[0] - self.xpos) + abs(last[1] - self.ypos) if last else 0
+        if last and dist < ARGUMENTS.tolerance:
+            return
+
+        # Determine if a new chunk needs to be started or the last one extended
+        if not self.last_exported_frame or self.sim.frame > self.last_exported_frame + 1:
+            self.exported_chunks.extend((self.sim.frame, 1))
+        else:
+            self.exported_chunks[-1] += 1
+
+        # Update logs
+        self.poslog.extend((pack_coord(self.xpos), pack_coord(self.ypos)))
+        self.last_exported_frame = self.sim.frame
+        self.last_exported_coords = (self.xpos, self.ypos)
 
 class EntityToggleMine(Entity):
     """This class handles both toggle mines (untoggled state) and regular mines (toggled state)."""
@@ -840,7 +893,6 @@ class EntityToggleMine(Entity):
                 if not overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
                                                 ninja.xpos, ninja.ypos, ninja.RADIUS):
                     self.set_state(0)
-                    self.log(2)
         else: #Set state to untoggled if ninja dies while toggling a mine
             if self.state == 2 and ninja.state == 6:
                 self.set_state(1)
@@ -859,6 +911,7 @@ class EntityToggleMine(Entity):
         if state in (0, 1, 2):
             self.state = state
             self.RADIUS = self.RADII[state]
+            self.log_collision(state)
 
 
 class EntityGold(Entity):
@@ -867,7 +920,6 @@ class EntityGold(Entity):
     def __init__(self, type, sim, xcoord, ycoord):
         super().__init__(type, sim, xcoord, ycoord)
         self.is_logical_collidable = True
-        self.collected = False
         
     def logical_collision(self):
         """The gold is collected if touches by a ninja that is not in winning state."""
@@ -877,7 +929,7 @@ class EntityGold(Entity):
                                         ninja.xpos, ninja.ypos, ninja.RADIUS):
                 self.sim.gold_collected += 1
                 self.active = False
-                self.log()
+                self.log_collision()
 
 
 class EntityExit(Entity):
@@ -903,7 +955,6 @@ class EntityExitSwitch(Entity):
     def __init__(self, type, sim, xcoord, ycoord, parent):
         super().__init__(type, sim, xcoord, ycoord)
         self.is_logical_collidable = True
-        self.collected = False
         self.parent = parent
 
     def logical_collision(self):
@@ -915,7 +966,7 @@ class EntityExitSwitch(Entity):
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
             self.active = False
             self.sim.grid_entity[self.parent.cell].append(self.parent) #Add door to the entity grid so the ninja can touch it
-            self.log()
+            self.log_collision()
 
 
 class EntityDoorBase(Entity):
@@ -962,6 +1013,7 @@ class EntityDoorBase(Entity):
         """Change the state of the door from closed to open or from open to closed."""
         self.closed = closed
         self.segment.active = closed
+        self.log_collision(0 if closed else 1)
         for grid_edge in self.grid_edges:
             if self.is_vertical:
                 self.sim.ver_grid_edge_dic[grid_edge] += 1 if closed else -1
@@ -1009,7 +1061,6 @@ class EntityDoorLocked(EntityDoorBase):
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
             self.change_state(closed = False)
             self.active = False
-            self.log()
 
 
 class EntityDoorTrap(EntityDoorBase):
@@ -1026,7 +1077,6 @@ class EntityDoorTrap(EntityDoorBase):
                                     ninja.xpos, ninja.ypos, ninja.RADIUS):
             self.change_state(closed = True)
             self.active = False
-            self.log()
 
 
 class EntityLaunchPad(Entity):
@@ -1109,13 +1159,21 @@ class EntityDroneBase(Entity):
 
     def __init__(self, type, sim, xcoord, ycoord, orientation, mode, speed):
         super().__init__(type, sim, xcoord, ycoord)
+        self.log_positions = ARGUMENTS.full_export
         self.is_movable = True
         self.speed = speed
-        self.dir = orientation // 2
-        self.dir_old = orientation // 2
+        self.dir = None
+        self.turn(orientation // 2)
         self.mode = mode
         self.xtarget, self.ytarget = self.xpos, self.ypos
         self.xpos2, self.ypos2 = self.xpos, self.ypos
+
+    def turn(self, dir):
+        """Change the drone's direction and log it."""
+        self.dir_old = self.dir or dir
+        self.dir = dir
+        if ARGUMENTS.full_export:
+            self.log_collision(dir)
 
     def move(self):
         """Make the drone move along the grid. The drone will try to move towards the center of an
@@ -1151,8 +1209,7 @@ class EntityDroneBase(Entity):
             new_dir = (self.dir + self.DIR_LIST[self.mode][i]) % 4
             valid_dir = self.test_next_direction_and_goal(new_dir)
             if valid_dir:
-                self.dir_old = self.dir
-                self.dir = new_dir
+                self.turn(new_dir)
                 return True
         return False
 
@@ -1232,6 +1289,7 @@ class EntityBounceBlock(Entity):
 
     def __init__(self, type, sim, xcoord, ycoord):
         super().__init__(type, sim, xcoord, ycoord)
+        self.log_positions = ARGUMENTS.full_export
         self.is_physical_collidable = True
         self.is_logical_collidable = True
         self.is_movable = True
@@ -1282,6 +1340,7 @@ class EntityThwump(Entity):
 
     def __init__(self, type, sim, xcoord, ycoord, orientation):
         super().__init__(type, sim, xcoord, ycoord)
+        self.log_positions = ARGUMENTS.full_export
         self.is_movable = True
         self.is_thinkable = True
         self.is_logical_collidable = True
@@ -1290,7 +1349,13 @@ class EntityThwump(Entity):
         self.is_horizontal = orientation in (0, 4)
         self.direction = 1 if orientation in (0, 2) else -1
         self.xorigin, self.yorigin = self.xpos, self.ypos
-        self.state = 0 #0:immobile, 1:forward, -1:backward
+        self.set_state(0) #0:immobile, 1:forward, -1:backward
+
+    def set_state(self, state):
+        """Set the thwump's state and log it. 0:immobile, 1:forward, -1:backward"""
+        self.state = state
+        if ARGUMENTS.full_export:
+            self.log_collision(state % 3) #The logged value goes from 0 to 2
 
     def move(self):
         """Update the position of the thwump only if it is already moving. If the thwump retracts past
@@ -1304,7 +1369,7 @@ class EntityThwump(Entity):
                 #If the thwump as retreated past its starting point, set its position to the origin.
                 if self.state == -1 and (ypos_new - self.yorigin) * (self.ypos - self.yorigin) < 0:
                     self.ypos = self.yorigin
-                    self.state = 0
+                    self.set_state(0)
                     return
                 cell_y = math.floor((self.ypos + speed_dir * 11) / 12)
                 cell_y_new = math.floor((ypos_new + speed_dir * 11) / 12)
@@ -1312,7 +1377,7 @@ class EntityThwump(Entity):
                     cell_x1 = math.floor((self.xpos - 11) / 12)
                     cell_x2 = math.floor((self.xpos + 11) / 12)
                     if not is_empty_row(self.sim, cell_x1, cell_x2, cell_y, speed_dir):
-                        self.state = -1
+                        self.set_state(-1)
                         return
                 self.ypos = ypos_new
             else:
@@ -1320,7 +1385,7 @@ class EntityThwump(Entity):
                 #If the thwump as retreated past its starting point, set its position to the origin.
                 if self.state == -1 and (xpos_new - self.xorigin) * (self.xpos - self.xorigin) < 0:
                     self.xpos = self.xorigin
-                    self.state = 0
+                    self.set_state(0)
                     return
                 cell_x = math.floor((self.xpos + speed_dir * 11) / 12)
                 cell_x_new = math.floor((xpos_new + speed_dir * 11) / 12)
@@ -1328,7 +1393,7 @@ class EntityThwump(Entity):
                     cell_y1 = math.floor((self.ypos - 11) / 12)
                     cell_y2 = math.floor((self.ypos + 11) / 12)
                     if not is_empty_column(self.sim, cell_x, cell_y1, cell_y2, speed_dir):
-                        self.state = -1
+                        self.set_state(-1)
                         return
                 self.xpos = xpos_new
             self.grid_move()
@@ -1352,7 +1417,7 @@ class EntityThwump(Entity):
                                 break
                             thwump_ycell += self.direction
                         if i > 0 and dy * self.direction <= 0:
-                            self.state = 1
+                            self.set_state(1)
             else:
                 if abs(self.ypos - ninja.ypos) < activation_range: #If the ninja is in the activation range
                     ninja_xcell = math.floor(ninja.xpos / 12)
@@ -1367,7 +1432,7 @@ class EntityThwump(Entity):
                                 break
                             thwump_xcell += self.direction
                         if i > 0 and dx * self.direction <= 0:
-                            self.state = 1
+                            self.set_state(1)
 
     def physical_collision(self):
         """Return the depenetration vector for the ninja if it collides with the thwump."""
@@ -1532,11 +1597,11 @@ class EntityDeathBall(Entity):
     DRAG_MAX_SPEED = 0.9
     DRAG_NO_TARGET = 0.95
 
-    def __init__(self, type, sim, xcoord, ycoord, id):
+    def __init__(self, type, sim, xcoord, ycoord):
         super().__init__(type, sim, xcoord, ycoord)
+        self.log_positions = ARGUMENTS.full_export
         self.is_thinkable = True
         self.is_logical_collidable = True
-        self.id = id
         self.xspeed, self.yspeed = 0, 0
 
     def think(self):
@@ -1609,8 +1674,8 @@ class EntityDeathBall(Entity):
 
         #Handle bounces with other deathballs
         db_count = self.sim.map_data[1200]
-        if self.id + 1 < db_count:
-            db_targets = self.sim.entity_dic[25][self.id+1:]
+        if self.index + 1 < db_count:
+            db_targets = self.sim.entity_dic[self.type][self.index+1:]
             for db_target in db_targets:
                 dx = self.xpos - db_target.xpos
                 dy = self.ypos - db_target.ypos
@@ -1660,13 +1725,22 @@ class EntityShoveThwump(Entity):
 
     def __init__(self, type, sim, xcoord, ycoord):
         super().__init__(type, sim, xcoord, ycoord)
+        self.log_positions = ARGUMENTS.full_export
         self.is_thinkable = True
         self.is_logical_collidable = True
         self.is_physical_collidable = True
         self.xorigin, self.yorigin = self.xpos, self.ypos
         self.xdir, self.ydir = 0, 0
-        self.state = 0 #0:immobile, 1:activated, 2:launching, 3:retreating
+        self.set_state(0) #0:immobile, 1:activated, 2:launching, 3:retreating
         self.activated = False
+
+    def set_state(self, state):
+        """Changes the state of the shwump. 0:immobile, 1:activated, 2:launching, 3:retreating
+        Also logs it, combined with the direction information into a single integer."""
+        self.state = state
+        if ARGUMENTS.full_export:
+            dir = map_vector_to_orientation(self.xdir, self.ydir)
+            self.log_collision(4 * state + dir // 2)
 
     def think(self):
         """Update the state of the shwump and move it if possible."""
@@ -1674,7 +1748,7 @@ class EntityShoveThwump(Entity):
             if self.activated:
                 self.activated = False
                 return
-            self.state = 2
+            self.set_state(2)
         if self.state == 3:
             origin_dist = abs(self.xpos - self.xorigin) + abs(self.ypos - self.yorigin)
             if origin_dist >= 1:
@@ -1682,7 +1756,7 @@ class EntityShoveThwump(Entity):
             else:
                 self.xpos = self.xorigin
                 self.ypos = self.yorigin
-                self.state = 0
+                self.set_state(0)
         elif self.state == 2:
             self.move_if_possible(-self.xdir, -self.ydir, 4)
 
@@ -1698,7 +1772,7 @@ class EntityShoveThwump(Entity):
                 cell_y1 = math.floor((self.ypos - 8) / 12)
                 cell_y2 = math.floor((self.ypos + 8) / 12)
                 if not is_empty_column(self.sim, cell_x, cell_y1, cell_y2, xdir):
-                    self.state = 3
+                    self.set_state(3)
                     return
             self.xpos = xpos_new
         else:
@@ -1709,7 +1783,7 @@ class EntityShoveThwump(Entity):
                 cell_x1 = math.floor((self.xpos - 8) / 12)
                 cell_x2 = math.floor((self.xpos + 8) / 12)
                 if not is_empty_row(self.sim, cell_x1, cell_x2, cell_y, ydir):
-                    self.state = 3
+                    self.set_state(3)
                     return
             self.ypos = ypos_new
         self.grid_move()
@@ -1741,7 +1815,7 @@ class EntityShoveThwump(Entity):
                 if depen[1][1] > 0.2:
                     self.xdir = depen_x
                     self.ydir = depen_y
-                    self.state = 1
+                    self.set_state(1)
             elif self.state == 1:
                 if self.xdir * depen_x + self.ydir * depen_y >= 0.01:
                     self.activated = True
@@ -1826,7 +1900,7 @@ class Simulator:
     def load(self, map_data):
         """From the given map data, initiate the level geometry, the entities and the ninja."""
         self.frame = 0
-        self.entitylog = []
+        self.collisionlog = []
         self.gold_collected = 0
 
         #initiate a dictionary mapping each tile id to its cell. Start by filling it with full tiles (id of 1).
@@ -1942,8 +2016,8 @@ class Simulator:
 
         #Initiate each entity (other than ninjas)
         index = 1230
-        db_index = 0
         exit_door_count = self.map_data[1156]
+        Entity.entity_counts = [0] * 40
         while (index < len(map_data)):
             type = self.map_data[index]
             xcoord = self.map_data[index+1]
@@ -1974,9 +2048,9 @@ class Simulator:
                 entity = EntityLaunchPad(type, self, xcoord, ycoord, orientation)
             elif type == 11:
                 entity = EntityOneWayPlatform(type, self, xcoord, ycoord, orientation)
-            elif type == 14:
+            elif type == 14 and not ARGUMENTS.basic_sim:
                 entity = EntityDroneZap(type, self, xcoord, ycoord, orientation, mode)
-            #elif type == 15:
+            #elif type == 15 and not ARGUMENTS.basic_sim:
             #    entity = EntityDroneChaser(type, self, xcoord, ycoord, orientation, mode)
             elif type == 17:
                 entity = EntityBounceBlock(type, self, xcoord, ycoord)
@@ -1984,14 +2058,13 @@ class Simulator:
                 entity = EntityThwump(type, self, xcoord, ycoord, orientation)
             elif type == 21:
                 entity = EntityToggleMine(type, self, xcoord, ycoord, 1)
-            elif type == 23:
-                entity = EntityLaser(type, self, xcoord, ycoord, orientation, mode)
+            #elif type == 23 and not ARGUMENTS.basic_sim:
+            #    entity = EntityLaser(type, self, xcoord, ycoord, orientation, mode)
             elif type == 24:
                 entity = EntityBoostPad(type, self, xcoord, ycoord)
-            elif type == 25:
-                entity = EntityDeathBall(type, self, xcoord, ycoord, db_index)
-                db_index += 1
-            elif type == 26:
+            elif type == 25 and not ARGUMENTS.basic_sim:
+                entity = EntityDeathBall(type, self, xcoord, ycoord)
+            elif type == 26 and not ARGUMENTS.basic_sim:
                 entity = EntityMiniDrone(type, self, xcoord, ycoord, orientation, mode)
             elif type == 28:
                 entity = EntityShoveThwump(type, self, xcoord, ycoord)
@@ -2001,6 +2074,10 @@ class Simulator:
                 self.entity_dic[type].append(entity)
                 self.grid_entity[entity.cell].append(entity)
             index += 5
+
+        for list in self.entity_dic.values():
+            for entity in list:
+                entity.log_position()
 
     def tick(self, hor_input, jump_input):
         """Gets called every frame to update the whole physics simulation."""
@@ -2012,13 +2089,15 @@ class Simulator:
         self.ninja.jump_input = jump_input
 
         #Move all movable entities
-        for entity in sum(self.entity_dic.values(), []):
-            if entity.is_movable and entity.active:
-                entity.move()
+        for list in self.entity_dic.values():
+            for entity in list:
+                if entity.is_movable and entity.active:
+                    entity.move()
         #Make all thinkable entities think
-        for entity in sum(self.entity_dic.values(), []):
-            if entity.is_thinkable and entity.active:
-                entity.think()
+        for list in self.entity_dic.values():
+            for entity in list:
+                if entity.is_thinkable and entity.active:
+                    entity.think()
         
         if self.ninja.state != 9:
             ninja = self.ninja if self.ninja.state != 6 else self.ninja.ragdoll #if dead, apply physics to ragdoll instead.
@@ -2037,10 +2116,10 @@ class Simulator:
             self.ninja.calc_ninja_position()
 
         #Update all the logs for debugging purposes and for tracing the route.
-        self.ninja.poslog.append((self.frame, round(self.ninja.xpos, 6), round(self.ninja.ypos, 6)))
-        self.ninja.speedlog.append((self.frame, round(self.ninja.xspeed, 6), round(self.ninja.yspeed, 6)))
-        self.ninja.xposlog.append(self.ninja.xpos)
-        self.ninja.yposlog.append(self.ninja.ypos)
+        self.ninja.log()
+        for list in self.entity_dic.values():
+            for entity in list:
+                entity.log_position()
 
 
 def gather_segments_from_region(sim, x1, y1, x2, y2):
@@ -2319,21 +2398,29 @@ def map_orientation_to_vector(orientation):
                        4:(-1, 0), 5:(-diag, -diag), 6:(0, -1), 7:(diag, -diag)}
     return orientation_dic[orientation]
 
+def map_vector_to_orientation(xdir, ydir):
+    """Returns an orientation value (0-7) from a vector. The vector can be
+    arbitrary, as rounding to these 8 directions is performed."""
+    angle = math.atan2(ydir, xdir)
+    if angle < 0: angle += 2 * math.pi
+    return round(8 * angle / (2 * math.pi)) % 8
+
+def clamp(n, a, b):
+    """Force a number n into a range (a, b)"""
+    return a if n < a else b if n > b else n
+
 def clamp_cell(xcell, ycell):
     """If necessary, adjust coordinates of cell so it is in bounds."""
-    xcell = max(xcell, 0)
-    xcell = min(xcell, 43)
-    ycell = max(ycell, 0)
-    ycell = min(ycell, 24)
-    return (xcell, ycell)
+    return (clamp(xcell, 0, 43), clamp(ycell, 0, 24))
 
 def clamp_half_cell(xcell, ycell):
     """If necessary, adjust coordinates of half cell so it is in bounds."""
-    xcell = max(xcell, 0)
-    xcell = min(xcell, 88)
-    ycell = max(ycell, 0)
-    ycell = min(ycell, 50)
-    return (xcell, ycell)
+    return (clamp(xcell, 0, 88), clamp(ycell, 0, 50))
+
+def pack_coord(coord):
+    """Pack a coordinate into a signed short for exporting"""
+    lim = (1 << 15) - 1
+    return clamp(round(10 * coord), -lim, lim)
 
 def is_empty_row(sim, xcoord1, xcoord2, ycoord, dir):
     """Return true if the cell has no solid horizontal edge in the specified direction."""

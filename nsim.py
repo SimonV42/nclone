@@ -33,7 +33,7 @@ class Ninja:
 
     #Physics constants for the ninja.
     GRAVITY_FALL = 0.06666666666666665 
-    GRAVITY_JUMP = 0.01111111111111111 
+    GRAVITY_JUMP = 0.01111111111111111
     GROUND_ACCEL = 0.06666666666666665
     AIR_ACCEL = 0.04444444444444444
     DRAG_REGULAR = 0.9933221725495059 # 0.99^(2/3)
@@ -1290,9 +1290,68 @@ class EntityDroneChaser(EntityDroneZap):
         super().choose_next_direction_and_goal()
         
 
+class EntityFloorGuard(Entity):
+    RADIUS = 6
+    SPEED = 3.428571428571428 #24/7
+
+    def __init__(self, type, sim, xcoord, ycoord):
+        super().__init__(type, sim, xcoord, ycoord)
+        self.is_movable = True
+        self.is_thinkable = True
+        self.is_logical_collidable = True
+        self.state = 0 #0:immobile, -1:chasing left, 1:chasing right
+
+    def think(self):
+        ninja = self.sim.ninja
+        if not self.state and ninja.is_valid_target():
+            #Try to initiate chase if the floor guard is immobile and ninja is in correct y range
+            if self.ypos + self.RADIUS - 24 <= ninja.ypos <= self.ypos + self.RADIUS:
+                ninja_xcell = math.floor(ninja.xpos / 12)
+                fguard_xcell = math.floor(self.xpos / 12)
+                fguard_ycell = math.floor(self.ypos / 12)
+                direction = 0
+                if ninja.xpos < self.xpos:
+                    direction = -1
+                if ninja.xpos > self.xpos:
+                    direction = 1
+                #Start chase if there are no grid edges between ninja and floor guard
+                while ninja_xcell != fguard_xcell:
+                    if not is_empty_column(self.sim, fguard_xcell, fguard_ycell, fguard_ycell, direction):
+                        return #as soon as a grid edge is encountered, the function aborts and there is no chase
+                    fguard_xcell += direction
+                self.state = direction
+
+    def move(self):
+        if self.state == 0:
+            return
+        #Only execute function if the floor guard is in chase state
+        xpos_new = self.xpos + self.state*self.SPEED
+        xcell = math.floor((self.xpos + self.state*self.RADIUS) / 12)
+        xcell_new = math.floor((xpos_new + self.state*self.RADIUS) / 12)
+        #If the floor guard is projected to move to another cell, check if its movement is obstructed
+        if xcell != xcell_new:
+            ycell = math.floor(self.ypos / 12)
+            if (not is_empty_column(self.sim, xcell, ycell, ycell, self.state) or 
+                is_empty_row(self.sim, xcell_new, xcell_new, ycell, 1)):
+                if self.state == 1:
+                    xcell += 1
+                xpos_new = 12*xcell - (self.RADIUS + 0.01)*self.state
+                self.state = 0
+        self.xpos = xpos_new
+        self.grid_move()
+
+    def logical_collision(self):
+        """Kill the ninja if it touches the floor guard."""
+        ninja = self.sim.ninja
+        if ninja.is_valid_target():
+            if overlap_circle_vs_circle(self.xpos, self.ypos, self.RADIUS,
+                                        ninja.xpos, ninja.ypos, ninja.RADIUS):
+                ninja.kill(0, 0, 0, 0, 0)
+
+
 class EntityBounceBlock(Entity):
     SEMI_SIDE = 9
-    STIFFNESS = 0.02222222222222222
+    STIFFNESS = 0.02222222222222222 #1/45
     DAMPENING = 0.98
     STRENGTH = 0.2
 
@@ -1962,7 +2021,7 @@ class Simulator:
             for y in range(23):
                 self.tile_dic[(x+1, y+1)] = tile_data[x + y*42]
 
-        #This loops makes the inventory of grid edges and orthogonal linear segments,
+        #This loop makes the inventory of grid edges and orthogonal linear segments,
         #and initiates non-orthogonal linear segments and circular segments.
         for coord, tile_id in self.tile_dic.items():
             xcoord, ycoord = coord
@@ -2054,6 +2113,8 @@ class Simulator:
                 entity = EntityDroneZap(type, self, xcoord, ycoord, orientation, mode)
             #elif type == 15 and not ARGUMENTS.basic_sim:
             #    entity = EntityDroneChaser(type, self, xcoord, ycoord, orientation, mode)
+            elif type == 16 and not ARGUMENTS.basic_sim:
+                entity = EntityFloorGuard(type, self, xcoord, ycoord)
             elif type == 17:
                 entity = EntityBounceBlock(type, self, xcoord, ycoord)
             elif type == 20:
@@ -2425,7 +2486,7 @@ def pack_coord(coord):
     return clamp(round(10 * coord), -lim, lim)
 
 def is_empty_row(sim, xcoord1, xcoord2, ycoord, dir):
-    """Return true if the cell has no solid horizontal edge in the specified direction."""
+    """Return true if the row of half cells have no solid horizontal edge in the specified direction."""
     xcoords = range(xcoord1, xcoord2+1)
     if dir == 1:
         return not any(sim.hor_grid_edge_dic[clamp_half_cell(xcoord, ycoord+1)] for xcoord in xcoords)
@@ -2433,7 +2494,7 @@ def is_empty_row(sim, xcoord1, xcoord2, ycoord, dir):
         return not any(sim.hor_grid_edge_dic[clamp_half_cell(xcoord, ycoord)] for xcoord in xcoords)
     
 def is_empty_column(sim, xcoord, ycoord1, ycoord2, dir):
-    """Return true if the cell has no solid vertical edge in the specified direction."""
+    """Return true if the column of half cells have no solid vertical edge in the specified direction."""
     ycoords = range(ycoord1, ycoord2+1)
     if dir == 1:
         return not any(sim.ver_grid_edge_dic[clamp_half_cell(xcoord+1, ycoord)] for ycoord in ycoords)

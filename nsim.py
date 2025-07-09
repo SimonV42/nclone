@@ -1004,14 +1004,14 @@ class EntityDoorBase(Entity):
             self.grid_edges.append((door_half_xcell, door_half_ycell-2))
             self.grid_edges.append((door_half_xcell, door_half_ycell-1))
             for grid_edge in self.grid_edges:
-                sim.ver_grid_edge_dic[grid_edge] += 1
+                sim.door_ver_grid_edge_dic[grid_edge] += 1
         else:
             self.segment = GridSegmentLinear((self.xpos-12, self.ypos), (self.xpos+12, self.ypos),
                                              oriented=False)
             self.grid_edges.append((door_half_xcell-2, door_half_ycell))
             self.grid_edges.append((door_half_xcell-1, door_half_ycell))
             for grid_edge in self.grid_edges:
-                sim.hor_grid_edge_dic[grid_edge] += 1
+                sim.door_hor_grid_edge_dic[grid_edge] += 1
         sim.segment_dic[door_cell].append(self.segment)
         #Update position and cell so it corresponds to the switch and not the door.
         self.xpos = self.sw_xpos
@@ -1025,9 +1025,9 @@ class EntityDoorBase(Entity):
         self.log_collision(0 if closed else 1)
         for grid_edge in self.grid_edges:
             if self.is_vertical:
-                self.sim.ver_grid_edge_dic[grid_edge] += 1 if closed else -1
+                self.sim.door_ver_grid_edge_dic[grid_edge] += 1 if closed else -1
             else:
-                self.sim.hor_grid_edge_dic[grid_edge] += 1 if closed else -1
+                self.sim.door_hor_grid_edge_dic[grid_edge] += 1 if closed else -1
 
 
 class EntityDoorRegular(EntityDoorBase):
@@ -1332,7 +1332,7 @@ class EntityFloorGuard(Entity):
         if xcell != xcell_new:
             ycell = math.floor(self.ypos / 12)
             if (not is_empty_column(self.sim, xcell, ycell, ycell, self.state) or 
-                is_empty_row(self.sim, xcell_new, xcell_new, ycell, 1)):
+                self.sim.tile_hor_grid_edge_dic[clamp_half_cell(xcell_new, ycell+1)] != 2):
                 if self.state == 1:
                     xcell += 1
                 xpos_new = 12*xcell - (self.RADIUS + 0.01)*self.state
@@ -1894,26 +1894,26 @@ class Simulator:
     #This is a dictionary mapping every tile id to the grid edges it contains.
     #The first 6 values represent horizontal half-tile edges, from left to right then top to bottom.
     #The last 6 values represent vertical half-tile edges, from top to bottom then left to right.
-    #1 if there is a grid edge, 0 otherwise.
-    TILE_GRID_EDGE_MAP = {0:[0,0,0,0,0,0,0,0,0,0,0,0], 1:[1,1,0,0,1,1,1,1,0,0,1,1], #0-1: Empty and full tiles
-                          2:[1,1,1,1,0,0,1,0,0,0,1,0], 3:[0,1,0,0,0,1,0,0,1,1,1,1], #2-5: Half tiles
-                          4:[0,0,1,1,1,1,0,1,0,0,0,1], 5:[1,0,0,0,1,0,1,1,1,1,0,0], 
-                          6:[1,1,0,1,1,0,1,1,0,1,1,0], 7:[1,1,1,0,0,1,1,0,0,1,1,1], #6-9: 45 degree slopes
-                          8:[0,1,1,0,1,1,0,1,1,0,1,1], 9:[1,0,0,1,1,1,1,1,1,0,0,1], 
-                          10:[1,1,0,0,1,1,1,1,0,0,1,1], 11:[1,1,0,0,1,1,1,1,0,0,1,1], #10-13: Quarter moons
-                          12:[1,1,0,0,1,1,1,1,0,0,1,1], 13:[1,1,0,0,1,1,1,1,0,0,1,1], 
-                          14:[1,1,0,1,1,0,1,1,0,1,1,0], 15:[1,1,1,0,0,1,1,0,0,1,1,1], #14-17: Quarter pipes
-                          16:[0,1,1,0,1,1,0,1,1,0,1,1], 17:[1,0,0,1,1,1,1,1,1,0,0,1], 
-                          18:[1,1,1,1,0,0,1,0,0,0,1,0], 19:[1,1,1,1,0,0,1,0,0,0,1,0], #18-21: Short mild slopes
-                          20:[0,0,1,1,1,1,0,1,0,0,0,1], 21:[0,0,1,1,1,1,0,1,0,0,0,1], 
-                          22:[1,1,0,0,1,1,1,1,0,0,1,1], 23:[1,1,0,0,1,1,1,1,0,0,1,1], #22-25: Raised mild slopes
-                          24:[1,1,0,0,1,1,1,1,0,0,1,1], 25:[1,1,0,0,1,1,1,1,0,0,1,1], 
-                          26:[1,0,0,0,1,0,1,1,1,1,0,0], 27:[0,1,0,0,0,1,0,0,1,1,1,1], #26-29: Short steep slopes
-                          28:[0,1,0,0,0,1,0,0,1,1,1,1], 29:[1,0,0,0,1,0,1,1,1,1,0,0], 
-                          30:[1,1,0,0,1,1,1,1,0,0,1,1], 31:[1,1,0,0,1,1,1,1,0,0,1,1], #30-33: Raised steep slopes
-                          32:[1,1,0,0,1,1,1,1,0,0,1,1], 33:[1,1,0,0,1,1,1,1,0,0,1,1], 
-                          34:[1,1,0,0,0,0,0,0,0,0,0,0], 35:[0,0,0,0,0,0,0,0,0,0,1,1], #34-37: Glitched tiles
-                          36:[0,0,0,0,1,1,0,0,0,0,0,0], 37:[0,0,0,0,0,0,1,1,0,0,0,0]} 
+    #0 if empty, 1 if semi-solid (slope or curve), 2 if solid.
+    TILE_GRID_EDGE_MAP = {0:[0,0,0,0,0,0,0,0,0,0,0,0], 1:[2,2,0,0,2,2,2,2,0,0,2,2], #0-1: Empty and full tiles
+                          2:[2,2,2,2,0,0,2,0,0,0,2,0], 3:[0,2,0,0,0,2,0,0,2,2,2,2], #2-5: Half tiles
+                          4:[0,0,2,2,2,2,0,2,0,0,0,2], 5:[2,0,0,0,2,0,2,2,2,2,0,0], 
+                          6:[2,2,0,1,1,0,2,2,0,1,1,0], 7:[2,2,1,0,0,1,1,0,0,1,2,2], #6-9: 45 degree slopes
+                          8:[0,1,1,0,2,2,0,1,1,0,2,2], 9:[1,0,0,1,2,2,2,2,1,0,0,1], 
+                          10:[2,2,0,0,1,1,2,2,0,0,1,1], 11:[2,2,0,0,1,1,1,1,0,0,2,2], #10-13: Quarter moons
+                          12:[1,1,0,0,2,2,1,1,0,0,2,2], 13:[1,1,0,0,2,2,2,2,0,0,1,1], 
+                          14:[2,2,0,1,1,0,2,2,0,1,1,0], 15:[2,2,1,0,0,1,1,0,0,1,2,2], #14-17: Quarter pipes
+                          16:[0,1,1,0,2,2,0,1,1,0,2,2], 17:[1,0,0,1,2,2,2,2,1,0,0,1], 
+                          18:[2,2,1,1,0,0,2,0,0,0,1,0], 19:[2,2,1,1,0,0,1,0,0,0,2,0], #18-21: Short mild slopes
+                          20:[0,0,1,1,2,2,0,1,0,0,0,2], 21:[0,0,1,1,2,2,0,2,0,0,0,1], 
+                          22:[2,2,0,0,1,1,2,2,0,0,2,1], 23:[2,2,0,0,1,1,2,1,0,0,2,2], #22-25: Raised mild slopes
+                          24:[1,1,0,0,2,2,1,2,0,0,2,2], 25:[1,1,0,0,2,2,2,2,0,0,1,2], 
+                          26:[2,0,0,0,1,0,2,2,1,1,0,0], 27:[0,2,0,0,0,1,0,0,1,1,2,2], #26-29: Short steep slopes
+                          28:[0,1,0,0,0,2,0,0,1,1,2,2], 29:[1,0,0,0,2,0,2,2,1,1,0,0], 
+                          30:[2,2,0,0,2,1,2,2,0,0,1,1], 31:[2,2,0,0,1,2,1,1,0,0,2,2], #30-33: Raised steep slopes
+                          32:[1,2,0,0,2,2,1,1,0,0,2,2], 33:[2,1,0,0,2,2,2,2,0,0,1,1], 
+                          34:[2,2,0,0,0,0,0,0,0,0,0,0], 35:[0,0,0,0,0,0,0,0,0,0,2,2], #34-37: Glitched tiles
+                          36:[0,0,0,0,2,2,0,0,0,0,0,0], 37:[0,0,0,0,0,0,2,2,0,0,0,0]} 
 
     #This is a dictionary mapping every tile id to the orthogonal linear segments it contains, 
     #same order as grid edges.
@@ -1983,16 +1983,18 @@ class Simulator:
 
         #Initiate dictionaries of grid edges and segments. They are all set to zero initialy,
         #except for the edges of the frame, which are solid.
-        self.hor_grid_edge_dic = {}
+        self.tile_hor_grid_edge_dic = {}
         for x in range(88):
             for y in range(51):
                 value = 1 if y in (0, 50) else 0
-                self.hor_grid_edge_dic[(x, y)] = value
-        self.ver_grid_edge_dic = {}
+                self.tile_hor_grid_edge_dic[(x, y)] = value
+        self.tile_ver_grid_edge_dic = {}
         for x in range(89):
             for y in range(50):
                 value = 1 if x in (0, 88) else 0
-                self.ver_grid_edge_dic[(x, y)] = value
+                self.tile_ver_grid_edge_dic[(x, y)] = value
+        self.door_hor_grid_edge_dic = dict([((x, y), 0) for x in range(88) for y in range(51)])
+        self.door_ver_grid_edge_dic = dict([((x, y), 0) for x in range(89) for y in range(50)])
         self.hor_segment_dic = {}
         for x in range(88):
             for y in range(51):
@@ -2031,13 +2033,13 @@ class Simulator:
                 segment_ortho_list = self.TILE_SEGMENT_ORTHO_MAP[tile_id]
                 for y in range(3):
                     for x in range(2):
-                        self.hor_grid_edge_dic[(2*xcoord + x, 2*ycoord + y)] = (
-                            (self.hor_grid_edge_dic[(2*xcoord + x, 2*ycoord + y)] + grid_edge_list[2*y + x]) % 2)
+                        self.tile_hor_grid_edge_dic[(2*xcoord + x, 2*ycoord + y)] = (
+                            grid_edge_list[2*y + x] if self.tile_hor_grid_edge_dic[(2*xcoord + x, 2*ycoord + y)] == 0 else 0)
                         self.hor_segment_dic[(2*xcoord + x, 2*ycoord + y)] += segment_ortho_list[2*y + x]
                 for x in range(3):
                     for y in range(2):
-                        self.ver_grid_edge_dic[(2*xcoord + x, 2*ycoord + y)] = (
-                            (self.ver_grid_edge_dic[(2*xcoord + x, 2*ycoord + y)] + grid_edge_list[2*x + y + 6]) % 2)
+                        self.tile_ver_grid_edge_dic[(2*xcoord + x, 2*ycoord + y)] = (
+                            grid_edge_list[2*x + y + 6] if self.tile_ver_grid_edge_dic[(2*xcoord + x, 2*ycoord + y)] == 0 else 0)
                         self.ver_segment_dic[(2*xcoord + x, 2*ycoord + y)] += segment_ortho_list[2*x + y + 6]
 
             #Initiate non-orthogonal linear and circular segments.
@@ -2489,14 +2491,18 @@ def is_empty_row(sim, xcoord1, xcoord2, ycoord, dir):
     """Return true if the row of half cells have no solid horizontal edge in the specified direction."""
     xcoords = range(xcoord1, xcoord2+1)
     if dir == 1:
-        return not any(sim.hor_grid_edge_dic[clamp_half_cell(xcoord, ycoord+1)] for xcoord in xcoords)
+        return not (any(sim.tile_hor_grid_edge_dic[clamp_half_cell(xcoord, ycoord+1)] for xcoord in xcoords) or
+                    any(sim.door_hor_grid_edge_dic[clamp_half_cell(xcoord, ycoord+1)] for xcoord in xcoords))
     if dir == -1:
-        return not any(sim.hor_grid_edge_dic[clamp_half_cell(xcoord, ycoord)] for xcoord in xcoords)
+        return not (any(sim.tile_hor_grid_edge_dic[clamp_half_cell(xcoord, ycoord)] for xcoord in xcoords) or
+                    any(sim.door_hor_grid_edge_dic[clamp_half_cell(xcoord, ycoord)] for xcoord in xcoords))
     
 def is_empty_column(sim, xcoord, ycoord1, ycoord2, dir):
     """Return true if the column of half cells have no solid vertical edge in the specified direction."""
     ycoords = range(ycoord1, ycoord2+1)
     if dir == 1:
-        return not any(sim.ver_grid_edge_dic[clamp_half_cell(xcoord+1, ycoord)] for ycoord in ycoords)
+        return not (any(sim.tile_ver_grid_edge_dic[clamp_half_cell(xcoord+1, ycoord)] for ycoord in ycoords) or
+                    any(sim.door_ver_grid_edge_dic[clamp_half_cell(xcoord+1, ycoord)] for ycoord in ycoords))
     if dir == -1:
-        return not any(sim.ver_grid_edge_dic[clamp_half_cell(xcoord, ycoord)] for ycoord in ycoords)
+        return not (any(sim.tile_ver_grid_edge_dic[clamp_half_cell(xcoord, ycoord)] for ycoord in ycoords) or
+                    any(sim.door_ver_grid_edge_dic[clamp_half_cell(xcoord, ycoord)] for ycoord in ycoords))
